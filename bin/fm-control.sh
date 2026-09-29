@@ -642,7 +642,8 @@ do_exit() {
   # matters, because a slash command opens a completion popup on some TUIs that
   # swallows the first Enter.
   local submit_err submit_rc=0 err_detail="" verdict reason
-  submit_err=$(mktemp "${TMPDIR:-/tmp}/fm-control-submit-err.XXXXXX")
+  submit_err=$(mktemp "${TMPDIR:-/tmp}/fm-control-submit-err.XXXXXX") \
+    || die "could not create a temp file under ${TMPDIR:-/tmp} to capture the exit submission's errors, so the $cmd exit command was not sent to task $ID; make that directory writable, then retry '$VERB'"
   verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>"$submit_err") || submit_rc=$?
   if [ -s "$submit_err" ]; then
     err_detail=$(tr '\n' ' ' < "$submit_err" | sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//')

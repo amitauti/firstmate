@@ -2275,6 +2275,10 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
     return 0
   fi
+  if ! printf '%s' "$out" | jq -e '.result.agent | type == "object"' >/dev/null 2>&1; then
+    printf 'unknown'
+    return 0
+  fi
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
   case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
     shell) printf 'stale-agent'; return 0 ;;

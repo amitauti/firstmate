@@ -242,10 +242,11 @@ case "${1:-}" in
         ;;
       process-info)
         cmd=$(cat "$D/command" 2>/dev/null || echo zsh)
+        spid=$(cat "$D/shell_pid" 2>/dev/null || echo "$$")
         if [ "$cmd" = zsh ] || [ "$cmd" = bash ] || [ "$cmd" = sh ]; then
-          printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[{"pid":%s,"name":"bash","argv0":"bash","cmdline":"bash"}]}}}\n' "${3:-w1:p1}" "$$" "$$"
+          printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[{"pid":%s,"name":"bash","argv0":"bash","cmdline":"bash"}]}}}\n' "${3:-w1:p1}" "$spid" "$spid"
         else
-          printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[{"pid":200,"name":"%s","argv0":"%s","cmdline":"%s"}]}}}\n' "${3:-w1:p1}" "$$" "$cmd" "$cmd" "$cmd"
+          printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[{"pid":200,"name":"%s","argv0":"%s","cmdline":"%s"}]}}}\n' "${3:-w1:p1}" "$spid" "$cmd" "$cmd" "$cmd"
         fi
         exit 0
         ;;
@@ -277,7 +278,7 @@ case "${1:-}" in
            && [ -z "${FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS:-}" ] \
            && { [ "$payload" = /exit ] || [ "$payload" = /quit ]; }; then
           printf 'bash' > "$D/command"
-          printf 'dead' > "$D/agent_status"
+          printf 'unknown' > "$D/agent_status"
         fi
         exit 0
         ;;
@@ -295,7 +296,7 @@ case "${1:-}" in
       get)
         cmd=$(cat "$D/command" 2>/dev/null || echo zsh)
         astat=$(cat "$D/agent_status" 2>/dev/null || echo idle)
-        if [ "$astat" = dead ] || [ "$cmd" = zsh ] || [ "$cmd" = bash ] || [ "$cmd" = sh ]; then
+        if [ "$astat" = none ]; then
           printf '{"error":{"code":"agent_not_found"}}\n'
         else
           printf '{"result":{"agent":{"agent":"%s","agent_status":"%s"}}}\n' "$cmd" "$astat"
@@ -308,6 +309,13 @@ esac
 exit 0
 SH
   chmod +x "$fb/herdr"
+}
+
+# herdr_pane_shell <case-dir>: a real, childless process stands in for the
+# pane's shell, so the shell-only process view is provable after /exit.
+herdr_pane_shell() {
+  sleep 300 >/dev/null 2>&1 &
+  printf '%s' "$!" > "$1/fake/shell_pid"
 }
 
 new_case_herdr() {
@@ -341,6 +349,7 @@ add_task() {
     echo "mode=no-mistakes"
     echo "yolo=off"
     echo "model=default"
+    echo "effort=default"
     if [ "$backend" = herdr ]; then
       echo "backend=$backend"
       echo "herdr_session=default"
@@ -1189,7 +1198,9 @@ test_herdr_exit_healthy_idle_agent_succeeds() {
   local dir out rc
   dir=$(new_case_herdr "herdr-exit-idle")
   add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  herdr_pane_shell "$dir"
   out=$(run_control "$dir" t1 exit); rc=$?
+  kill "$(cat "$dir/fake/shell_pid")" 2>/dev/null
   expect_code 0 "$rc" "exit on a healthy idle herdr-backed agent should succeed"$'\n'"$out"
   assert_contains "$out" "stopped t1 harness=claude backend=herdr" "exit should report stopped"
   [ "$(literals "$dir")" = /exit ] || fail "exit should type /exit, got: $(literals "$dir")"
@@ -1201,7 +1212,9 @@ test_herdr_exit_healthy_done_agent_succeeds() {
   dir=$(new_case_herdr "herdr-exit-done")
   printf 'done' > "$dir/fake/agent_status"
   add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  herdr_pane_shell "$dir"
   out=$(run_control "$dir" t1 exit); rc=$?
+  kill "$(cat "$dir/fake/shell_pid")" 2>/dev/null
   expect_code 0 "$rc" "exit on a healthy done herdr-backed agent should succeed"$'\n'"$out"
   assert_contains "$out" "stopped t1 harness=claude backend=herdr" "exit should report stopped"
   [ "$(literals "$dir")" = /exit ] || fail "exit should type /exit, got: $(literals "$dir")"
@@ -1265,6 +1278,21 @@ test_exit_failed_submission_refuses_with_observed_state_and_next_step() {
   pass "fm-control exit: failed submission refuses with observed state and next step without bare unactionable messages"
 }
 
+test_herdr_exit_refuses_without_submit_capture_file() {
+  local dir out rc
+  dir=$(new_case_herdr "herdr-no-tmpdir")
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  out=$(TMPDIR="$dir/missing-tmp" run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "exit should refuse when the submit capture file cannot be created"
+  assert_contains "$out" "could not create a temp file under $dir/missing-tmp" \
+    "refusal should name the temp-file failure"
+  assert_contains "$out" "the /exit exit command was not sent to task t1" \
+    "refusal must not claim a transport error"
+  assert_not_contains "$out" "transport error" "no send was attempted"
+  [ -z "$(literals "$dir")" ] || fail "no command should be typed when the capture file is unavailable"
+  pass "fm-control exit: an unwritable temp dir refuses before sending instead of reporting a transport error"
+}
+
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_devin_interrupt_invalidates_busy
@@ -1310,3 +1338,4 @@ test_herdr_exit_healthy_idle_agent_succeeds
 test_herdr_exit_healthy_done_agent_succeeds
 test_exit_unproven_composer_refuses_with_observed_state_and_next_step
 test_exit_failed_submission_refuses_with_observed_state_and_next_step
+test_herdr_exit_refuses_without_submit_capture_file
