@@ -2352,7 +2352,8 @@ require_exclusive_worktree_slot_record() {
 # closes only this task's record and leaves the slot, its copy, and the other
 # task's record untouched, never returning the slot to the pool. Anything short
 # of that proof refuses, and so does any commit on this task's own branch that
-# is not on a remote, whatever --force says.
+# is not on a remote, whatever --force says. A scout carries no branch work, so
+# it skips that landed-work test, as validate_worktree_teardown_safety does.
 leave_worktree_slot_to_owner() {  # <slot> <collision>
   local slot=$1 other_id=${2%%|*} other_meta=${2##*|} copy_br task_br other_br unlanded default branch_ref
   local other_state other_home cmd_prefix="" home_note=""
@@ -2380,6 +2381,10 @@ leave_worktree_slot_to_owner() {  # <slot> <collision>
     echo "Read both tasks (bin/fm-crew-state.sh $ID; ${cmd_prefix}bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
     return 1
   fi
+  if [ "$KIND" = scout ]; then
+    leave_worktree_slot_note "$slot" "$other_id" "$other_home" "$copy_br"
+    return 0
+  fi
   branch_ref=""
   if [ -n "$task_br" ]; then
     if git -C "$slot" rev-parse --quiet --verify "refs/heads/$task_br" >/dev/null 2>&1; then
@@ -2406,10 +2411,14 @@ leave_worktree_slot_to_owner() {  # <slot> <collision>
       return 1
     fi
   fi
-  echo "warning: task $ID's recorded worktree $slot is task $other_id's copy - it is on $other_id's recorded branch '$copy_br' - so only $ID's own record is closed; the slot, its copy, and task $other_id's record are left untouched, and the slot is not returned to the pool." >&2
+  leave_worktree_slot_note "$slot" "$other_id" "$other_home" "$copy_br"
+}
+
+leave_worktree_slot_note() {  # <slot> <other-id> <other-home> <copy-branch>
+  echo "warning: task $ID's recorded worktree $1 is task $2's copy - it is on $2's recorded branch '$4' - so only $ID's own record is closed; the slot, its copy, and task $2's record are left untouched, and the slot is not returned to the pool." >&2
   TEARDOWN_SLOT_REASSIGNED=1
-  TEARDOWN_SLOT_REASSIGNED_TO=$other_id
-  TEARDOWN_SLOT_REASSIGNED_HOME=$other_home
+  TEARDOWN_SLOT_REASSIGNED_TO=$2
+  TEARDOWN_SLOT_REASSIGNED_HOME=$3
 }
 
 require_exclusive_task_worktree_slot() {

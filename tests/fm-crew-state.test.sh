@@ -5423,6 +5423,27 @@ test_stale_record_sharing_live_copy_reads_unknown_while_owner_reads_done() {
   pass "a stale record sharing a live copy reads unknown while the owner reads its real outcome"
 }
 
+test_stale_record_names_the_owning_task_in_another_home() {
+  reset_fakes
+  local d second out
+  d=$(new_case stale-and-live-share-copy-cross-home)
+  second="$d/secondmate-home"
+  mkdir -p "$d/data" "$second/state"
+  printf '%s\n' "- mate - fixture (home: $second; scope: test; projects: project; added 2026-01-01)" \
+    > "$d/data/secondmates.md"
+  make_repo_on_branch "$d/wt" fm/live-b
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/stale-a.meta" "window=fm:fm-stale-a" "worktree=$d/wt" "kind=ship" "branch=fm/stale-a"
+  fm_write_meta "$second/state/live-b.meta" "window=fm:fm-live-b" "worktree=$d/wt" "kind=ship" "branch=fm/live-b"
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/live-b https://github.com/org/repo/pull/126)"
+  FM_FAKE_AXI_HOME=$FM_FAKE_AXI_STATUS
+  out=$(FM_HOME="$d" run_crew_state "$d" stale-a)
+  assert_contains "$out" "state: unknown" "the stale lane reads unknown"
+  assert_contains "$out" "belongs to task live-b (home $second)" "the stale lane names the owning task and its home"
+  assert_contains "$out" "bin/fm-teardown.sh stale-a" "the stale lane points at teardown of itself"
+  pass "a stale record sharing a copy owned in another home names that task and its home"
+}
+
 test_run_does_not_bind_to_a_record_without_a_branch() {
   reset_fakes
   local d out
@@ -5751,6 +5772,7 @@ test_unverifiable_run_selection_reports_unknown
 test_legacy_conflicting_run_records_report_unknown
 test_crew_state_worktree_claimed_by_other_task_run_reads_unknown
 test_stale_record_sharing_live_copy_reads_unknown_while_owner_reads_done
+test_stale_record_names_the_owning_task_in_another_home
 test_run_does_not_bind_to_a_record_without_a_branch
 
 echo "all fm-crew-state tests passed"

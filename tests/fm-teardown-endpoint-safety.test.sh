@@ -660,6 +660,33 @@ test_stale_record_on_another_tasks_copy_closes_when_squash_merged() {
   pass "fm-teardown: a stale record whose work landed via squash merge closes safely"
 }
 
+test_stale_scout_record_on_a_ship_tasks_copy_closes_without_returning_the_slot() {
+  local dir id=stale-scout other=live-b rc before
+  dir=$(make_case slot-scout-on-ship-copy)
+  mark_case_as_treehouse_pool "$dir"
+  git -C "$dir/worktree" checkout -q -b "fm/$other"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  fm_write_meta "$dir/home/state/$other.meta" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship" "branch=fm/$other"
+  before=$(cat "$dir/home/state/$other.meta")
+
+  set +e
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "teardown of a stale scout record on a ship task's copy failed: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "the stale scout's record was not closed"
+  [ "$(cat "$dir/home/state/$other.meta")" = "$before" ] || fail "the owning task's record was changed"
+  assert_present "$dir/worktree/sentinel" "the owning task's copy was reset"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "the owning task's slot was returned to the pool: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "not returned to the pool" "teardown must say the slot was not recycled"
+  pass "fm-teardown: a stale scout record on a ship task's copy is closed while the slot stays with its owner"
+}
+
 test_shared_slot_without_established_ownership_refuses() {
   local dir id=stale-a other=live-b rc
   dir=$(make_case slot-owner-unreadable)
@@ -1528,6 +1555,7 @@ test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
 test_stale_record_on_another_tasks_copy_closes_without_returning_the_slot
 test_stale_record_on_another_tasks_copy_closes_when_squash_merged
+test_stale_scout_record_on_a_ship_tasks_copy_closes_without_returning_the_slot
 test_shared_slot_without_established_ownership_refuses
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_own_and_absent_slot_claims_still_tear_down
