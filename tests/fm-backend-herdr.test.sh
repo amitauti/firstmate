@@ -528,7 +528,7 @@ test_stale_registration_ignores_status_and_reads_the_process() {
   sleep_bin=$(command -v sleep) || fail "sleep not found"
   "$sleep_bin" 300 &
   shell_pid=$!
-  for status in working 'done' blocked; do
+  for status in working 'done' blocked unknown exited; do
     out=$(stale_registration_case "shell-only-$status" "$status" "$(shell_only_process_info "$shell_pid")")
     [ "$out" = "stale-agent dead refused" ] \
       || { kill "$shell_pid" 2>/dev/null; fail "a lingering '$status' record over a shell-only pane must still read stale-agent/dead, got '$out'"; }

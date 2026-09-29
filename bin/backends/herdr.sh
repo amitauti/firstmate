@@ -2275,15 +2275,15 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
     return 0
   fi
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
-  case "$status" in
-    working|idle|done|blocked) ;;
-    *) printf 'unknown'; return 0 ;;
-  esac
   case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
-    agent|other) printf 'live' ;;
-    shell) printf 'stale-agent' ;;
-    *) printf 'unknown' ;;
+    shell) printf 'stale-agent'; return 0 ;;
+    agent|other)
+      case "$status" in
+        working|idle|done|blocked) printf 'live'; return 0 ;;
+      esac
+      ;;
   esac
+  printf 'unknown'
 }
 
 # fm_backend_herdr_pane_agent_session_ref: the agent session reference the

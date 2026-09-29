@@ -211,6 +211,116 @@ new_case() {
   printf '%s\n' "$dir"
 }
 
+make_herdr_control_stub() {  # <dir>
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+D=$FM_FAKE_DIR
+args=()
+while [ $# -gt 0 ]; do
+  if [ "$1" = --session ]; then
+    shift 2
+  else
+    args+=("$1")
+    shift
+  fi
+done
+set -- "${args[@]}"
+case "${1:-}" in
+  status)
+    printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true,"compatible":true}}\n'
+    exit 0
+    ;;
+  pane)
+    shift
+    case "${1:-}" in
+      get)
+        printf '{"result":{"type":"pane","pane":{"pane_id":"%s","workspace_id":"w1","tab_id":"t1"}}}\n' "${2:-w1:p1}"
+        exit 0
+        ;;
+      process-info)
+        cmd=$(cat "$D/command" 2>/dev/null || echo zsh)
+        if [ "$cmd" = zsh ] || [ "$cmd" = bash ] || [ "$cmd" = sh ]; then
+          printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[{"pid":%s,"name":"bash","argv0":"bash","cmdline":"bash"}]}}}\n' "${3:-w1:p1}" "$$" "$$"
+        else
+          printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_processes":[{"pid":200,"name":"%s","argv0":"%s","cmdline":"%s"}]}}}\n' "${3:-w1:p1}" "$$" "$cmd" "$cmd" "$cmd"
+        fi
+        exit 0
+        ;;
+      read)
+        if [ -f "$D/screen" ]; then
+          cat "$D/screen"
+        elif [ -n "${FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS:-}" ]; then
+          printf '  \xe2\x9d\xaf\n'
+        else
+          lit=$(cat "$D/literal" 2>/dev/null || true)
+          if [ -n "$lit" ]; then
+            printf '  \xe2\x9d\xaf %s\n' "$lit"
+          else
+            printf '  \xe2\x9d\xaf\n'
+          fi
+        fi
+        exit 0
+        ;;
+      send-text)
+        shift
+        target=${1:-}
+        payload=${2:-}
+        if [ -n "${FM_FAKE_HERDR_SEND_FAILS:-}" ]; then
+          printf 'herdr: transport failure: socket closed\n' >&2
+          exit 1
+        fi
+        printf '%s\n' "$payload" >> "$D/literal"
+        if [ -z "${FM_FAKE_NEVER_DIES:-}" ] \
+           && [ -z "${FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS:-}" ] \
+           && { [ "$payload" = /exit ] || [ "$payload" = /quit ]; }; then
+          printf 'bash' > "$D/command"
+          printf 'dead' > "$D/agent_status"
+        fi
+        exit 0
+        ;;
+      send-keys)
+        shift
+        key=${2:-}
+        printf '%s\n' "$key" >> "$D/keys"
+        exit 0
+        ;;
+    esac
+    ;;
+  agent)
+    shift
+    case "${1:-}" in
+      get)
+        cmd=$(cat "$D/command" 2>/dev/null || echo zsh)
+        astat=$(cat "$D/agent_status" 2>/dev/null || echo idle)
+        if [ "$astat" = dead ] || [ "$cmd" = zsh ] || [ "$cmd" = bash ] || [ "$cmd" = sh ]; then
+          printf '{"error":{"code":"agent_not_found"}}\n'
+        else
+          printf '{"result":{"agent":{"agent":"%s","agent_status":"%s"}}}\n' "$cmd" "$astat"
+        fi
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+}
+
+new_case_herdr() {
+  local dir="$TMP_ROOT/$1-$RANDOM"
+  mkdir -p "$dir/home/state" "$dir/home/data" "$dir/fake"
+  : > "$dir/fake/literal"
+  : > "$dir/fake/keys"
+  printf 'claude' > "$dir/fake/command"
+  printf 'idle' > "$dir/fake/agent_status"
+  make_herdr_control_stub "$dir"
+  printf '%s\n' "$dir"
+}
+
 # add_task <case-dir> <id> <harness> [kind] [backend] [window]
 # Builds the task's worktree (a real git worktree so the relaunch checkpoint
 # has something to account for), its brief, and its state/<id>.meta.
@@ -231,8 +341,15 @@ add_task() {
     echo "mode=no-mistakes"
     echo "yolo=off"
     echo "model=default"
-    echo "effort=default"
-    [ "$backend" = tmux ] || echo "backend=$backend"
+    if [ "$backend" = herdr ]; then
+      echo "backend=$backend"
+      echo "herdr_session=default"
+      echo "herdr_workspace_id=w1"
+      echo "herdr_tab_id=t1"
+      echo "herdr_pane_id=${window#*:}"
+    elif [ "$backend" != tmux ]; then
+      echo "backend=$backend"
+    fi
   } > "$home/state/$id.meta"
   printf '%s\n' "fm-$id" > "$dir/fake/windows"
   printf '%s' "$wt" > "$dir/fake/cwd"
@@ -1068,6 +1185,86 @@ EOF
   pass "fm-control-lib: only a runtime's own recorded session has a relaunch resume form"
 }
 
+test_herdr_exit_healthy_idle_agent_succeeds() {
+  local dir out rc
+  dir=$(new_case_herdr "herdr-exit-idle")
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "exit on a healthy idle herdr-backed agent should succeed"$'\n'"$out"
+  assert_contains "$out" "stopped t1 harness=claude backend=herdr" "exit should report stopped"
+  [ "$(literals "$dir")" = /exit ] || fail "exit should type /exit, got: $(literals "$dir")"
+  pass "fm-control exit: a healthy idle herdr-backed agent can be exited"
+}
+
+test_herdr_exit_healthy_done_agent_succeeds() {
+  local dir out rc
+  dir=$(new_case_herdr "herdr-exit-done")
+  printf 'done' > "$dir/fake/agent_status"
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 0 "$rc" "exit on a healthy done herdr-backed agent should succeed"$'\n'"$out"
+  assert_contains "$out" "stopped t1 harness=claude backend=herdr" "exit should report stopped"
+  [ "$(literals "$dir")" = /exit ] || fail "exit should type /exit, got: $(literals "$dir")"
+  pass "fm-control exit: a healthy done herdr-backed agent can be exited"
+}
+
+test_exit_unproven_composer_refuses_with_observed_state_and_next_step() {
+  local dir out rc
+  dir=$(new_case_herdr "herdr-unproven-composer")
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  cat > "$dir/fake/screen" <<'EOF'
+  1) Continue
+  2) Abort
+  Enter choice [1-2]: 
+EOF
+  out=$(run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "exit should refuse when composer is not proven empty"
+  assert_contains "$out" "task t1's composer state is 'unknown', not proven empty" \
+    "refusal should name the observed unknown composer state"
+  assert_contains "$out" "refusing to type the /exit exit command because it could concatenate onto existing text" \
+    "refusal should state why unproven composer blocks exit"
+  assert_contains "$out" "Clear the composer, then retry 'exit'" \
+    "refusal should give concrete operator next step"
+  [ -z "$(literals "$dir")" ] || fail "no command should be typed when composer is unproven"
+  pass "fm-control exit: a pane whose composer genuinely cannot be proven empty is refused with observed state and next step"
+}
+
+test_exit_failed_submission_refuses_with_observed_state_and_next_step() {
+  local dir out rc
+  dir=$(new_case_herdr "herdr-send-failed")
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  out=$(env FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS=1 \
+    PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    FM_CONTROL_POLL=0.01 FM_CONTROL_SETTLE_WAIT=0.05 \
+    FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
+    "$CONTROL" t1 exit 2>&1); rc=$?
+  expect_code 1 "$rc" "exit should refuse when submit verdict is send-failed"
+  assert_contains "$out" "the exit command could not be sent to task t1 on herdr (submission verdict is 'send-failed')" \
+    "refusal should name the send-failed verdict"
+  assert_contains "$out" "inspect endpoint default:w1:p1 to ensure its composer is clear and responsive, then retry 'exit'" \
+    "refusal should name concrete next step"
+  assert_not_contains "$out" "the exit command could not be sent to task t1 on herdr
+" \
+    "refusal must not be a bare message"
+
+  dir=$(new_case_herdr "herdr-transport-error")
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  out=$(env FM_FAKE_HERDR_SEND_FAILS=1 \
+    PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    FM_CONTROL_POLL=0.01 FM_CONTROL_SETTLE_WAIT=0.05 \
+    FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
+    "$CONTROL" t1 exit 2>&1); rc=$?
+  expect_code 1 "$rc" "exit should refuse when transport fails"
+  assert_contains "$out" "the exit command could not be sent to task t1 on herdr (submission verdict is 'send-failed': herdr: transport failure: socket closed)" \
+    "refusal should report send-failed with transport failure detail"
+  assert_contains "$out" "inspect endpoint default:w1:p1 to ensure its composer is clear and responsive, then retry 'exit'" \
+    "refusal should name concrete next step"
+  assert_not_contains "$out" "the exit command could not be sent to task t1 on herdr
+" \
+    "refusal must not be a bare message"
+  pass "fm-control exit: failed submission refuses with observed state and next step without bare unactionable messages"
+}
+
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
 test_devin_interrupt_invalidates_busy
@@ -1109,3 +1306,7 @@ test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
 test_secondmate_control_command_carries_no_marker
 test_fm_send_still_marks_the_same_secondmate_task
+test_herdr_exit_healthy_idle_agent_succeeds
+test_herdr_exit_healthy_done_agent_succeeds
+test_exit_unproven_composer_refuses_with_observed_state_and_next_step
+test_exit_failed_submission_refuses_with_observed_state_and_next_step
