@@ -5376,6 +5376,24 @@ test_legacy_conflicting_run_records_report_unknown() {
   pass 'legacy conflicting run records report unknown'
 }
 
+test_crew_state_worktree_claimed_by_other_task_run_reads_unknown() {
+  reset_fakes
+  local d out
+  d=$(new_case double-claimed-worktree-run)
+  make_repo_on_branch "$d/wt" fm/other-task
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/stale-task.meta" "window=fm:fm-stale-task" "worktree=$d/wt" "kind=ship" "branch=fm/stale-task"
+  fm_write_meta "$d/state/other-task.meta" "window=fm:fm-other-task" "worktree=$d/wt" "kind=ship" "branch=fm/other-task"
+  printf 'needs-decision: unlanded work needing decision\n' > "$d/state/stale-task.status"
+  FM_FAKE_AXI_STATUS="$(run_passed_with_pr fm/other-task "https://github.com/org/repo/pull/123")"
+  out=$(run_crew_state "$d" stale-task)
+  assert_contains "$out" "state: unknown" "doubly-claimed worktree run must report unknown"
+  assert_contains "$out" "source: run-step" "unknown verdict comes from run-step source"
+  assert_not_contains "$out" "state: done" "must never report another lane's completed run"
+  assert_not_contains "$out" "checks green" "must never report another lane's PR ready"
+  pass "crew-state read for task whose worktree is claimed by another task's run reports unknown"
+}
+
 # Captured AXI stdout is a serialized input contract, not implementation source.
 # Only the run identity is rebound to each disposable git repository; status,
 # outcome, steps, findings, and gate bytes stay as emitted. The capture README
@@ -5686,5 +5704,6 @@ test_competing_live_runs_report_unknown_with_both_ids
 test_newer_failed_run_is_not_hidden_by_older_live_run
 test_unverifiable_run_selection_reports_unknown
 test_legacy_conflicting_run_records_report_unknown
+test_crew_state_worktree_claimed_by_other_task_run_reads_unknown
 
 echo "all fm-crew-state tests passed"

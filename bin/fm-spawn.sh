@@ -3247,12 +3247,24 @@ spawn_worktree_isolated() { # <path>
   return 0
 }
 
+spawn_assert_worktree_not_claimed() { # [inspect-target]
+  local inspect_target=${1:-}
+  local collision other_id other_wt
+  if collision=$(fm_meta_find_colliding_worktree "$ID" "$WT" "$STATE"); then
+    other_id=${collision%%|*}
+    other_wt=${collision#*|}
+    echo "error: task $ID's allocated worktree $WT is already claimed by task $other_id (recorded worktree: $other_wt); refusing to launch into a colliding worktree${inspect_target:+; inspect window $inspect_target}" >&2
+    exit 1
+  fi
+}
+
 validate_spawn_worktree() { # <source> <inspect-target>
   local source=$1 inspect_target=$2
   if ! spawn_worktree_isolated "$WT"; then
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${SPAWN_WT_TOP:-none}'; spawning project '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
+  spawn_assert_worktree_not_claimed "$inspect_target"
 }
 
 # A pooled slot whose only deviation is a submodule gitlink is stale, not dirty:
@@ -4309,6 +4321,7 @@ fi
 # tab's original project directory.
 spawn_enter_recorded_worktree
 spawn_assert_agent_worktree
+spawn_assert_worktree_not_claimed "$T"
 
 # Pre-register Claude's workspace trust for the directory this launch starts in,
 # at the first point that directory is known and before any per-task state is

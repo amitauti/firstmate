@@ -565,6 +565,38 @@ fm_backend_meta_for_window() {  # <target> <state-dir>
   return 1
 }
 
+# fm_meta_find_colliding_worktree: checks whether any OTHER task record under
+# <state-dir> already names <worktree> in worktree= or home=.
+# If found, prints "<colliding-task-id>|<recorded-worktree>" and returns 0.
+# Otherwise returns 1.
+fm_meta_find_colliding_worktree() {  # <task-id> <worktree> <state-dir>
+  local task_id=$1 worktree=$2 state=$3
+  local wt_real meta other_id other_path other_real field
+  [ -n "$worktree" ] || return 1
+  [ -d "$state" ] || return 1
+  wt_real=$(cd "$worktree" 2>/dev/null && pwd -P) || wt_real=$worktree
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    other_id=${meta##*/}
+    other_id=${other_id%.meta}
+    [ "$other_id" != "$task_id" ] || continue
+    for field in worktree home; do
+      other_path=$(fm_meta_get "$meta" "$field")
+      [ -n "$other_path" ] || continue
+      if [ "$other_path" = "$worktree" ]; then
+        printf '%s|%s\n' "$other_id" "$other_path"
+        return 0
+      fi
+      other_real=$(cd "$other_path" 2>/dev/null && pwd -P) || other_real=$other_path
+      if [ -n "$other_real" ] && [ "$other_real" = "$wt_real" ]; then
+        printf '%s|%s\n' "$other_id" "$other_path"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
 fm_backend_task_id_for_selector() {  # <raw-target> <state-dir>
   local raw=$1 state=$2 id
   case "$raw" in

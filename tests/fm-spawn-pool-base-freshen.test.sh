@@ -183,6 +183,7 @@ test_stale_pool_base_refreshes_before_branching() {
       "$branch_head" "$current" "$(cat "$POOL_DIR/advanced-main.txt")"
   fi
 
+  rm -f "$HOME_DIR/state/pool-current-base-r1.meta"
   id='pool-current-base-repeat-r1'
   fm_test_spawn_brief "$HOME_DIR" "$id"
   out=$(run_spawn "$id" --mode no-mistakes --yolo off)
@@ -528,6 +529,7 @@ strand_submodule_pin_via_spawn() {  # <seed-id>
     || fail "the first spawn did not move the pooled base across the moved submodule pin"
   [ "$(git -C "$POOL_DIR/ui" rev-parse HEAD)" = "$SUBPIN1" ] \
     || fail "the first spawn did not strand the submodule on the pin the old base recorded"
+  rm -f "$HOME_DIR/state/$id.meta"
 }
 
 test_stale_submodule_pin_explains_itself() {
@@ -743,8 +745,40 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+test_spawn_refuses_when_allocated_worktree_claimed_by_other_task() {
+  local rec id colliding_id out status
+  id='pool-spawn-col-1'
+  colliding_id='pool-spawn-col-2'
+  rec=$(make_case spawn-col "$id")
+  read_case_record "$rec"
+
+  # Record another task claiming the pool worktree
+  cat > "$HOME_DIR/state/$colliding_id.meta" <<EOF
+window=test:fm-$colliding_id
+endpoint_task_id=$colliding_id
+worktree=$POOL_DIR
+project=$PROJECT_DIR
+harness=codex
+kind=ship
+mode=no-mistakes
+EOF
+
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  expect_code 1 "$status" \
+    "a spawn into a worktree already claimed by another task record must refuse"$'\n'"$out"
+  assert_contains "$out" "already claimed by task $colliding_id" \
+    "refusal must name the colliding task"
+  assert_contains "$out" "$POOL_DIR" \
+    "refusal must name the colliding recorded worktree"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "refused spawn must not publish metadata"
+  pass "fm-spawn: refuses when allocated worktree is already claimed by another task"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_spawn_refuses_when_allocated_worktree_claimed_by_other_task
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching

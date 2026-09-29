@@ -1237,6 +1237,28 @@ test_missing_worktree_refuses_before_stopping_anything() {
   pass "fm-control relaunch: an unaccountable local copy refuses before the agent is touched"
 }
 
+test_colliding_worktree_refuses_before_stopping_anything() {
+  local dir out rc
+  dir=$(new_case colwt rl10c)
+  add_ship_task "$dir" rl10c claude
+  cat > "$dir/home/state/rl-colliding.meta" <<EOF
+window=fmses:fm-rl-colliding
+endpoint_task_id=rl-colliding
+worktree=$dir/wt
+project=$dir/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+EOF
+  out=$(run_control "$dir" rl10c relaunch --note "x"); rc=$?
+  expect_code 1 "$rc" "a relaunch into a colliding worktree should refuse"
+  assert_contains "$out" "already claimed by task rl-colliding" "the refusal should name the colliding task"
+  assert_contains "$out" "$dir/wt" "the refusal should name the colliding recorded worktree"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused relaunch must not stop the agent"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch must send nothing"
+  pass "fm-control relaunch: a worktree claimed by another task record refuses before the agent is touched"
+}
+
 test_missing_instructions_refuse_before_stopping_anything() {
   local dir out rc
   dir=$(new_case nobrief rl11)
@@ -2420,6 +2442,7 @@ test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
 test_cursor_session_binding_is_retired_on_a_harness_switch
 test_missing_worktree_refuses_before_stopping_anything
+test_colliding_worktree_refuses_before_stopping_anything
 test_missing_instructions_refuse_before_stopping_anything
 test_checkpoint_refusal_leaves_the_record_byte_identical
 test_checkpoint_refuses_uninspectable_head_and_status

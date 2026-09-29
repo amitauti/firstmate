@@ -1042,7 +1042,53 @@ fi
 
 # --- run-step authoritative path -------------------------------------------
 
+assert_run_belongs_to_task() {
+  # Verify that the run actually belongs to this task before reporting its outcome.
+  # If the worktree is claimed by another task, or the run belongs to another task,
+  # report state as unknown - never as another lane's done, checks-green or PR.
+  local collision other_id
+  if collision=$(fm_meta_find_colliding_worktree "$ID" "$WT" "$STATE"); then
+    other_id=${collision%%|*}
+    emit unknown run-step "worktree claimed by task $other_id; cannot bind run to task $ID"
+  fi
+
+  local run_br
+  if [ "$RUN_SOURCE" = full ]; then
+    run_br=$(strip_quotes "$(nm_field branch)")
+  else
+    run_br=$CREW_BRANCH
+  fi
+
+  local other_meta other_m_id other_br
+  for other_meta in "$STATE"/*.meta; do
+    [ -f "$other_meta" ] && [ ! -L "$other_meta" ] || continue
+    other_m_id=${other_meta##*/}
+    other_m_id=${other_m_id%.meta}
+    [ "$other_m_id" != "$ID" ] || continue
+    other_br=$(grep '^branch=' "$other_meta" 2>/dev/null | cut -d= -f2- || true)
+    [ -n "$other_br" ] || other_br="fm/$other_m_id"
+    if [ -n "$run_br" ] && { [ "$run_br" = "$other_br" ] || [ "$run_br" = "fm/$other_m_id" ]; }; then
+      emit unknown run-step "run branch '$run_br' belongs to task $other_m_id; cannot bind run to task $ID"
+    fi
+    if [ -n "$CREW_BRANCH" ] && { [ "$CREW_BRANCH" = "$other_br" ] || [ "$CREW_BRANCH" = "fm/$other_m_id" ]; }; then
+      emit unknown run-step "worktree branch '$CREW_BRANCH' belongs to task $other_m_id; cannot bind run to task $ID"
+    fi
+  done
+
+  local task_recorded_branch
+  task_recorded_branch=$(meta_value branch)
+  if [ -n "$task_recorded_branch" ]; then
+    if [ -n "$run_br" ] && [ "$run_br" != "$task_recorded_branch" ]; then
+      emit unknown run-step "run branch '$run_br' does not match recorded task branch '$task_recorded_branch'"
+    fi
+    if [ -n "$CREW_BRANCH" ] && [ "$CREW_BRANCH" != "$task_recorded_branch" ]; then
+      emit unknown run-step "worktree branch '$CREW_BRANCH' does not match recorded task branch '$task_recorded_branch'"
+    fi
+  fi
+}
+
 if [ "$HAVE_RUN" = 1 ]; then
+  assert_run_belongs_to_task
   RUN_STATE=working
   RUN_DETAIL=""
   CI_STEP_STATUS=""
