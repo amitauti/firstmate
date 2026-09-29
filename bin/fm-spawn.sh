@@ -3249,13 +3249,17 @@ spawn_worktree_isolated() { # <path>
 
 spawn_assert_worktree_not_claimed() { # [inspect-target]
   local inspect_target=${1:-}
-  local collision other_id other_wt
-  if collision=$(fm_meta_find_colliding_worktree "$ID" "$WT" "$STATE"); then
-    other_id=${collision%%|*}
-    other_wt=${collision#*|}
-    echo "error: task $ID's allocated worktree $WT is already claimed by task $other_id (recorded worktree: $other_wt); refusing to launch into a colliding worktree${inspect_target:+; inspect window $inspect_target}" >&2
-    exit 1
-  fi
+  local collision rc=0
+  collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$WT" "$STATE") || rc=$?
+  case "$rc" in
+    0)
+      echo "error: task $ID's allocated worktree $WT is already claimed by task ${collision%%|*} (recorded worktree: ${collision#*|}); refusing to launch into a colliding worktree${inspect_target:+; inspect window $inspect_target}" >&2
+      exit 1 ;;
+    1) ;;
+    *)
+      echo "error: cannot check whether task $ID's allocated worktree $WT is claimed by another local Firstmate home's task; refusing to launch${inspect_target:+; inspect window $inspect_target}" >&2
+      exit 1 ;;
+  esac
 }
 
 validate_spawn_worktree() { # <source> <inspect-target>

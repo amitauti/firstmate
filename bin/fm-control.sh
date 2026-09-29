@@ -870,12 +870,13 @@ safe_checkpoint() {
   CHECKPOINT_LINES=()
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
-  local collision other_id other_wt
-  if collision=$(fm_meta_find_colliding_worktree "$ID" "$WT" "$STATE"); then
-    other_id=${collision%%|*}
-    other_wt=${collision#*|}
-    die "task $ID's recorded worktree $WT is already claimed by task $other_id (recorded worktree: $other_wt); refusing to relaunch into a colliding worktree"
-  fi
+  local collision rc=0
+  collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$WT" "$STATE") || rc=$?
+  case "$rc" in
+    0) die "task $ID's recorded worktree $WT is already claimed by task ${collision%%|*} (recorded worktree: ${collision#*|}); refusing to relaunch into a colliding worktree" ;;
+    1) ;;
+    *) die "cannot check whether task $ID's recorded worktree $WT is claimed by another local Firstmate home's task; refusing to relaunch" ;;
+  esac
   wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || die "task $ID's recorded worktree $WT cannot be resolved"
   wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null) \
     || die "task $ID's recorded worktree $WT is not a git worktree; refusing to relaunch without a checkout whose unlanded work can be accounted for"

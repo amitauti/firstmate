@@ -1042,48 +1042,54 @@ fi
 
 # --- run-step authoritative path -------------------------------------------
 
-assert_run_belongs_to_task() {
-  # Verify that the run actually belongs to this task before reporting its outcome.
-  # If the worktree is claimed by another task, or the run belongs to another task,
-  # report state as unknown - never as another lane's done, checks-green or PR.
-  local collision other_id
-  if collision=$(fm_meta_find_colliding_worktree "$ID" "$WT" "$STATE"); then
-    other_id=${collision%%|*}
-    emit unknown run-step "worktree claimed by task $other_id; cannot bind run to task $ID"
-  fi
-
-  local run_br
-  if [ "$RUN_SOURCE" = full ]; then
-    run_br=$(strip_quotes "$(nm_field branch)")
-  else
-    run_br=$CREW_BRANCH
-  fi
-
-  local other_meta other_m_id other_br
-  for other_meta in "$STATE"/*.meta; do
-    [ -f "$other_meta" ] && [ ! -L "$other_meta" ] || continue
-    other_m_id=${other_meta##*/}
-    other_m_id=${other_m_id%.meta}
-    [ "$other_m_id" != "$ID" ] || continue
-    other_br=$(grep '^branch=' "$other_meta" 2>/dev/null | cut -d= -f2- || true)
-    [ -n "$other_br" ] || other_br="fm/$other_m_id"
-    if [ -n "$run_br" ] && { [ "$run_br" = "$other_br" ] || [ "$run_br" = "fm/$other_m_id" ]; }; then
-      emit unknown run-step "run branch '$run_br' belongs to task $other_m_id; cannot bind run to task $ID"
-    fi
-    if [ -n "$CREW_BRANCH" ] && { [ "$CREW_BRANCH" = "$other_br" ] || [ "$CREW_BRANCH" = "fm/$other_m_id" ]; }; then
-      emit unknown run-step "worktree branch '$CREW_BRANCH' belongs to task $other_m_id; cannot bind run to task $ID"
+# The other task in this home whose record names <branch>, or nothing.
+branch_owner_task() {  # <branch>
+  local meta other_id other_br
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    other_id=${meta##*/}
+    other_id=${other_id%.meta}
+    [ "$other_id" != "$ID" ] || continue
+    other_br=$(fm_meta_get "$meta" branch)
+    [ -n "$other_br" ] || other_br="fm/$other_id"
+    if [ "$other_br" = "$1" ]; then
+      printf '%s\n' "$other_id"
+      return 0
     fi
   done
+  return 1
+}
 
-  local task_recorded_branch
-  task_recorded_branch=$(meta_value branch)
-  if [ -n "$task_recorded_branch" ]; then
-    if [ -n "$run_br" ] && [ "$run_br" != "$task_recorded_branch" ]; then
-      emit unknown run-step "run branch '$run_br' does not match recorded task branch '$task_recorded_branch'"
+assert_run_belongs_to_task() {
+  # A run binds to this task only when its branch, the copy's branch, and this
+  # task's recorded branch are proven identical and no other record claims that
+  # branch; anything less reads unknown - never as another lane's done,
+  # checks-green or PR.
+  local task_br run_br owner detail
+  task_br=$(meta_value branch)
+  [ -n "$task_br" ] \
+    || emit unknown run-step "task $ID's record names no branch, so the run in $WT cannot be bound to it; record its branch= and re-read"
+  [ -n "$CREW_BRANCH" ] \
+    || emit unknown run-step "cannot read the branch checked out in $WT, so no run can be bound to task $ID"
+  if [ "$CREW_BRANCH" != "$task_br" ]; then
+    detail="$WT is on branch '$CREW_BRANCH', not task $ID's recorded branch '$task_br'"
+    if owner=$(branch_owner_task "$CREW_BRANCH"); then
+      detail="$detail; that copy belongs to task $owner, so its run and PR are not task $ID's - reconcile task $ID's worktree= record"
     fi
-    if [ -n "$CREW_BRANCH" ] && [ "$CREW_BRANCH" != "$task_recorded_branch" ]; then
-      emit unknown run-step "worktree branch '$CREW_BRANCH' does not match recorded task branch '$task_recorded_branch'"
+    emit unknown run-step "$detail"
+  fi
+  if [ "$RUN_SOURCE" = full ]; then
+    run_br=$(strip_quotes "$(nm_field branch)")
+    if [ "$run_br" != "$task_br" ]; then
+      detail="run branch '$run_br' is not task $ID's recorded branch '$task_br'"
+      if owner=$(branch_owner_task "$run_br"); then
+        detail="$detail; that run belongs to task $owner"
+      fi
+      emit unknown run-step "$detail"
     fi
+  fi
+  if owner=$(branch_owner_task "$task_br"); then
+    emit unknown run-step "task $ID's recorded branch '$task_br' is also recorded by task $owner; reconcile whichever record is wrong before its run can be bound"
   fi
 }
 

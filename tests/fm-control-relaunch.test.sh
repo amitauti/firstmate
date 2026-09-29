@@ -1259,6 +1259,30 @@ EOF
   pass "fm-control relaunch: a worktree claimed by another task record refuses before the agent is touched"
 }
 
+test_worktree_claimed_in_a_secondmate_home_refuses_before_stopping_anything() {
+  local dir out rc
+  dir=$(new_case colwtsm rl10d)
+  add_ship_task "$dir" rl10d claude
+  mkdir -p "$dir/sm/state"
+  printf '%s\n' "- sm1 - secondmate (home: $dir/sm; scope: x; projects: proj; added 2026-09-28)" \
+    > "$dir/home/data/secondmates.md"
+  cat > "$dir/sm/state/sm-colliding.meta" <<EOF
+window=fmses:fm-sm-colliding
+endpoint_task_id=sm-colliding
+worktree=$dir/wt
+project=$dir/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+EOF
+  out=$(run_control "$dir" rl10d relaunch --note "x"); rc=$?
+  expect_code 1 "$rc" "a relaunch into a worktree another local home's task records should refuse"
+  assert_contains "$out" "already claimed by task sm-colliding" "the refusal should name the other home's task"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused relaunch must not stop the agent"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch must send nothing"
+  pass "fm-control relaunch: a worktree claimed in a local secondmate home refuses before the agent is touched"
+}
+
 test_missing_instructions_refuse_before_stopping_anything() {
   local dir out rc
   dir=$(new_case nobrief rl11)
@@ -2443,6 +2467,7 @@ test_muse_session_binding_is_retired_on_a_harness_switch
 test_cursor_session_binding_is_retired_on_a_harness_switch
 test_missing_worktree_refuses_before_stopping_anything
 test_colliding_worktree_refuses_before_stopping_anything
+test_worktree_claimed_in_a_secondmate_home_refuses_before_stopping_anything
 test_missing_instructions_refuse_before_stopping_anything
 test_checkpoint_refusal_leaves_the_record_byte_identical
 test_checkpoint_refuses_uninspectable_head_and_status
