@@ -159,6 +159,13 @@
 #   while it still holds the allocation lock drops its own claim; an abort after
 #   metadata publication has released that lock leaves the claim in place, and
 #   the next spawn's claim replaces it.
+#   A slot is also refused, on fresh spawn and relaunch alike, while any OTHER
+#   task record in any local Firstmate home still names it (the record scan in
+#   bin/fm-backend.sh's fm_meta_find_colliding_worktree): a stale record names
+#   the slot, so two lanes would share one copy. Fresh Treehouse spawns first
+#   make one bounded pass over the pool's free slots, skipping claimed ones
+#   (spawn_skip_claimed_treehouse_slot); the refusal names the colliding task and
+#   how to read and close it.
 #   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;

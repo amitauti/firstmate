@@ -93,6 +93,13 @@
 #      and ambiguity reporting. The selected run's id-addressed status must
 #      agree on id, branch, and live/terminal class before attribution;
 #      disagreement reports unknown with available candidate ids.
+#      An attributed run is then bound to THIS task only when branch ownership
+#      is established (assert_run_belongs_to_task): the task's recorded branch,
+#      the copy's checked-out branch, and a full record's run branch must all be
+#      present and identical, and no other record in this home may claim that
+#      branch. Anything less reads unknown, naming the owning task when another
+#      record explains the mismatch, so a stale record naming another lane's
+#      copy can never report that lane's run or PR as its own.
 #      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working
 #      (the id-addressed detail read carries step words the overview does not),
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal

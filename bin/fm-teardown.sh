@@ -98,7 +98,12 @@
 # cleanup step, teardown verifies record exclusivity: no OTHER task record in
 # this home or any locally registered Firstmate home may name the same live path
 # in its worktree= or home=. One live path with two task records is the reuse
-# collision itself, whichever record is stale.
+# collision itself, whichever record is stale. It refuses unless the copy is
+# positively the OTHER task's - checked out on that task's recorded branch, not
+# this task's - and this task's own branch has no unlanded commits; then this
+# record is the stale one, and teardown closes only it, leaving the slot, its
+# copy, and the other record untouched and never returning the slot
+# (leave_worktree_slot_to_owner). An unreadable copy branch refuses.
 # That scan alone cannot prove THIS record is the current owner, because the task
 # that took the slot next may leave no record it can reach - its own worker may
 # have exited and its record been cleaned up, or it may live in a home this
