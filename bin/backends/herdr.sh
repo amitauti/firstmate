@@ -2232,9 +2232,10 @@ EOF
 #                 stability across a server restart"), and what a future
 #                 `resume_agents_on_restore = false` restore would produce too
 #                 (a plain shell, never an agent).
-#   stale-agent - `agent get` reports a registered agent_status (working, idle,
-#                 done, or blocked) but fm_backend_herdr_pane_process_state
-#                 proves the pane is shell-only: the registered agent's process
+#   stale-agent - `agent get` returns a registration (whatever its
+#                 agent_status, recognized or not) but
+#                 fm_backend_herdr_pane_process_state proves the pane is
+#                 shell-only: the registered agent's process
 #                 has exited and Herdr kept its registration (issue #4115;
 #                 Herdr does not release a Pi registration on TUI shutdown when
 #                 a nested shell sits under the pane's top shell, the crew
