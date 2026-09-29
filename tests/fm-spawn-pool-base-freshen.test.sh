@@ -767,7 +767,7 @@ EOF
   status=$?
   expect_code 1 "$status" \
     "a spawn into a worktree already claimed by another task record must refuse"$'\n'"$out"
-  assert_contains "$out" "already claimed by task $colliding_id" \
+  assert_contains "$out" "task $colliding_id's recorded copy" \
     "refusal must name the colliding task"
   assert_contains "$out" "$POOL_DIR" \
     "refusal must name the colliding recorded worktree"
@@ -776,9 +776,154 @@ EOF
   pass "fm-spawn: refuses when allocated worktree is already claimed by another task"
 }
 
+# Re-lay a case as a two-slot Treehouse pool whose allocation the fakes drive
+# statefully: the pane's `treehouse get` and a `get --lease` both take the first
+# slot that is neither leased nor occupied, the pane's `exit` leaves its slot,
+# `treehouse return` drops a lease, and `treehouse status --json` reports each
+# slot available or in use. Sets SLOT1, SLOT2 and TH_DIR.
+lay_out_two_slot_pool() {
+  local slot_root="$CASE_DIR/slots"
+  TH_DIR="$CASE_DIR/th"
+  mkdir -p "$slot_root/1" "$slot_root/2" "$TH_DIR"
+  git -C "$PROJECT_DIR" worktree move "$POOL_DIR" "$slot_root/1/project"
+  git -C "$PROJECT_DIR" worktree add --quiet --detach "$slot_root/2/project" "$INITIAL_SHA"
+  SLOT1="$slot_root/1/project"
+  SLOT2="$slot_root/2/project"
+  printf '{"worktrees":[{"name":"1","path":"%s"},{"name":"2","path":"%s"}]}\n' "$SLOT1" "$SLOT2" \
+    > "$slot_root/treehouse-state.json"
+  printf '%s\n' "$SLOT1" "$SLOT2" > "$TH_DIR/slots"
+  : > "$TH_DIR/leased"
+  : > "$TH_DIR/occupied"
+  : > "$TH_DIR/log"
+  printf '%s\n' "$PROJECT_DIR" > "$TH_DIR/project"
+  printf '%s\n' "$PROJECT_DIR" > "$TH_DIR/pane"
+  export FM_FAKE_TH="$TH_DIR"
+  cat > "$FAKEBIN_DIR/treehouse" <<'SH'
+#!/usr/bin/env bash
+th=$FM_FAKE_TH
+free_slots() {
+  local s
+  while IFS= read -r s; do
+    grep -qxF -- "$s" "$th/leased" || grep -qxF -- "$s" "$th/occupied" || printf '%s\n' "$s"
+  done < "$th/slots"
+}
+case "${1:-}" in
+  _next) free_slots | head -1 | grep . ;;
+  status)
+    printf '['
+    sep=
+    while IFS= read -r s; do
+      st=in-use
+      free_slots | grep -qxF -- "$s" && st=available
+      printf '%s{"path":"%s","status":"%s"}' "$sep" "$s" "$st"
+      sep=,
+    done < "$th/slots"
+    printf ']\n' ;;
+  get)
+    case " $* " in
+      *" --lease "*)
+        s=$(free_slots | head -1)
+        [ -n "$s" ] || exit 1
+        printf '%s\n' "$s" >> "$th/leased"
+        printf 'lease %s\n' "$s" >> "$th/log"
+        printf '%s\n' "$s" ;;
+    esac ;;
+  return)
+    for s in "$@"; do :; done
+    grep -vxF -- "$s" "$th/leased" > "$th/leased.tmp" || true
+    mv "$th/leased.tmp" "$th/leased"
+    printf 'return %s\n' "$s" >> "$th/log" ;;
+esac
+exit 0
+SH
+  chmod +x "$FAKEBIN_DIR/treehouse"
+  mv "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/tmux.base"
+  cat > "$FAKEBIN_DIR/tmux" <<'SH'
+#!/usr/bin/env bash
+th=$FM_FAKE_TH
+case "$*" in
+  *"#{pane_current_path}"*) cat "$th/pane"; exit 0 ;;
+esac
+if [ "${1:-}" = send-keys ]; then
+  for a in "$@"; do
+    case "$a" in
+      'treehouse get')
+        s=$("$(dirname "$0")/treehouse" _next) || continue
+        printf '%s\n' "$s" > "$th/occupied"
+        printf '%s\n' "$s" > "$th/pane"
+        printf 'pane %s\n' "$s" >> "$th/log" ;;
+      exit)
+        : > "$th/occupied"
+        cat "$th/project" > "$th/pane"
+        printf 'pane-exit\n' >> "$th/log" ;;
+    esac
+  done
+fi
+exec "$(dirname "$0")/tmux.base" "$@"
+SH
+  chmod +x "$FAKEBIN_DIR/tmux"
+}
+
+write_colliding_record() {  # <task-id> <worktree>
+  cat > "$HOME_DIR/state/$1.meta" <<EOF
+window=test:fm-$1
+endpoint_task_id=$1
+worktree=$2
+project=$PROJECT_DIR
+harness=codex
+kind=ship
+mode=no-mistakes
+branch=fm/$1
+EOF
+}
+
+test_spawn_skips_a_pool_slot_a_stale_record_claims() {
+  local rec id out status
+  id='pool-skip-claimed-r1'
+  rec=$(make_case skip-claimed "$id")
+  read_case_record "$rec"
+  lay_out_two_slot_pool
+  write_colliding_record pool-skip-stale "$SLOT1"
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  unset FM_FAKE_TH
+  expect_code 0 "$status" "a spawn offered a claimed slot should land in a free one"$'\n'"$out"
+  assert_grep "worktree=$SLOT2" "$HOME_DIR/state/$id.meta" \
+    "the spawn did not record the unclaimed slot as its worktree"
+  grep -Fxq -- "task=$id" "$CASE_DIR/slots/2/.fm-slot-owner" \
+    || fail "the unclaimed slot was not claimed for the spawned task"
+  [ ! -e "$CASE_DIR/slots/1/.fm-slot-owner" ] || fail "the spawn claimed the slot the stale record names"
+  grep -Fxq -- "lease $SLOT1" "$TH_DIR/log" || fail "the claimed slot was not held while the pane re-acquired: $(cat "$TH_DIR/log")"
+  grep -Fxq -- "return $SLOT1" "$TH_DIR/log" || fail "the held slot was not returned: $(cat "$TH_DIR/log")"
+  [ ! -s "$TH_DIR/leased" ] || fail "the spawn leaked a held slot: $(cat "$TH_DIR/leased")"
+  pass "fm-spawn: a pool slot a stale record still names is skipped for the next free one"
+}
+
+test_spawn_refuses_when_every_free_slot_is_claimed() {
+  local rec id out status
+  id='pool-all-claimed-r1'
+  rec=$(make_case all-claimed "$id")
+  read_case_record "$rec"
+  lay_out_two_slot_pool
+  write_colliding_record pool-all-stale-a "$SLOT1"
+  write_colliding_record pool-all-stale-b "$SLOT2"
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  unset FM_FAKE_TH
+  expect_code 1 "$status" "a spawn with every free slot claimed must refuse"$'\n'"$out"
+  assert_contains "$out" "task pool-all-stale-a's recorded copy" "the refusal must name the colliding task"
+  assert_contains "$out" "bin/fm-crew-state.sh pool-all-stale-a" "the refusal must say how to read the colliding task"
+  assert_contains "$out" "bin/fm-teardown.sh pool-all-stale-a" "the refusal must say how to close the colliding task"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn must not publish metadata"
+  [ ! -s "$TH_DIR/leased" ] || fail "the refused spawn leaked a held slot: $(cat "$TH_DIR/leased")"
+  pass "fm-spawn: a pool with every free slot claimed refuses with the colliding task and its remedy"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_spawn_refuses_when_allocated_worktree_claimed_by_other_task
+test_spawn_skips_a_pool_slot_a_stale_record_claims
+test_spawn_refuses_when_every_free_slot_is_claimed
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching

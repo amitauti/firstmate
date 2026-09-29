@@ -873,7 +873,7 @@ safe_checkpoint() {
   local collision rc=0
   collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$WT" "$STATE") || rc=$?
   case "$rc" in
-    0) die "task $ID's recorded worktree $WT is already claimed by task ${collision%%|*} (recorded worktree: ${collision#*|}); refusing to relaunch into a colliding worktree" ;;
+    0) die "task $ID's recorded worktree $WT is also task ${collision%%|*}'s recorded copy (${collision#*|}); refusing to relaunch into a colliding worktree. Read task ${collision%%|*}'s current state with bin/fm-crew-state.sh ${collision%%|*}, and close it with bin/fm-teardown.sh ${collision%%|*} once its work has landed, then relaunch again" ;;
     1) ;;
     *) die "cannot check whether task $ID's recorded worktree $WT is claimed by another local Firstmate home's task; refusing to relaunch" ;;
   esac

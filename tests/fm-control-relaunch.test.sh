@@ -1252,7 +1252,9 @@ mode=no-mistakes
 EOF
   out=$(run_control "$dir" rl10c relaunch --note "x"); rc=$?
   expect_code 1 "$rc" "a relaunch into a colliding worktree should refuse"
-  assert_contains "$out" "already claimed by task rl-colliding" "the refusal should name the colliding task"
+  assert_contains "$out" "task rl-colliding's recorded copy" "the refusal should name the colliding task"
+  assert_contains "$out" "bin/fm-crew-state.sh rl-colliding" "the refusal should say how to read the colliding task"
+  assert_contains "$out" "bin/fm-teardown.sh rl-colliding" "the refusal should say how to close the colliding task"
   assert_contains "$out" "$dir/wt" "the refusal should name the colliding recorded worktree"
   [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused relaunch must not stop the agent"
   [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch must send nothing"
@@ -1277,7 +1279,7 @@ mode=no-mistakes
 EOF
   out=$(run_control "$dir" rl10d relaunch --note "x"); rc=$?
   expect_code 1 "$rc" "a relaunch into a worktree another local home's task records should refuse"
-  assert_contains "$out" "already claimed by task sm-colliding" "the refusal should name the other home's task"
+  assert_contains "$out" "task sm-colliding's recorded copy" "the refusal should name the other home's task"
   [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused relaunch must not stop the agent"
   [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch must send nothing"
   pass "fm-control relaunch: a worktree claimed in a local secondmate home refuses before the agent is touched"

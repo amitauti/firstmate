@@ -3247,19 +3247,114 @@ spawn_worktree_isolated() { # <path>
   return 0
 }
 
+spawn_refuse_claimed_worktree() { # <collision> [inspect-target]
+  local other_id=${1%%|*} other_wt=${1#*|} inspect_target=${2:-}
+  echo "error: task $ID's allocated worktree $WT is already task $other_id's recorded copy ($other_wt); refusing to launch into a colliding worktree. Read task $other_id's current state with bin/fm-crew-state.sh $other_id, and close it with bin/fm-teardown.sh $other_id once its work has landed, then spawn again${inspect_target:+; inspect window $inspect_target}" >&2
+  exit 1
+}
+
 spawn_assert_worktree_not_claimed() { # [inspect-target]
   local inspect_target=${1:-}
   local collision rc=0
   collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$WT" "$STATE") || rc=$?
   case "$rc" in
-    0)
-      echo "error: task $ID's allocated worktree $WT is already claimed by task ${collision%%|*} (recorded worktree: ${collision#*|}); refusing to launch into a colliding worktree${inspect_target:+; inspect window $inspect_target}" >&2
-      exit 1 ;;
+    0) spawn_refuse_claimed_worktree "$collision" "$inspect_target" ;;
     1) ;;
     *)
       echo "error: cannot check whether task $ID's allocated worktree $WT is claimed by another local Firstmate home's task; refusing to launch${inspect_target:+; inspect window $inspect_target}" >&2
       exit 1 ;;
   esac
+}
+
+# Wait for the pane's `treehouse get` subshell to settle in its slot and set WT.
+spawn_await_treehouse_slot() {
+  local candidate="" last_seen="" last_reason p p_real
+  WT=""
+  last_reason="the pane reported no path"
+  for _ in $(seq 1 60); do
+    p=$(spawn_current_path "$WT_TARGET" || true)
+    [ -z "$p" ] || last_seen="$p"
+    if [ -n "$p" ] && spawn_worktree_isolated "$p"; then
+      p_real=$(real_path_or_raw "$p")
+      last_reason="it is an isolated worktree, but no second read agreed with it"
+      if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
+        WT="$p"
+        break
+      fi
+      candidate="$p_real"
+    else
+      candidate=""
+      [ -z "$p" ] || last_reason=$SPAWN_WT_REASON
+    fi
+    sleep 1
+  done
+  if [ -z "$WT" ]; then
+    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
+    return 1
+  fi
+}
+
+# `treehouse get` hands out the pool's first free slot, so a slot a stale task
+# record still names would be handed out again on every spawn. When that
+# happens, make one bounded pass over the pool's free slots: leave the rejected
+# slot, hold each slot the pool offers that another record still names under a
+# spawn-scoped lease so the pool skips it, stop at the first unclaimed one, and
+# let the pane's `treehouse get` take it. Every held slot is returned before this
+# returns. Refuses with the colliding task named when no unclaimed slot is free.
+spawn_skip_claimed_treehouse_slot() { # <inspect-target>
+  local inspect_target=$1 collision rc=0 first holder pool free i path wt_real offered=""
+  local -a held=()
+  collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$WT" "$STATE") || rc=$?
+  [ "$rc" = 0 ] || return 0
+  first=$collision
+  fm_treehouse_pool_slot "$PROJ_ABS" "$WT" || spawn_refuse_claimed_worktree "$first" "$inspect_target"
+  wt_real=$(real_path_or_raw "$WT")
+  pool=$(dirname "$(dirname "$wt_real")")
+  holder="fm-spawn-skip-$ID"
+  spawn_send_text_line "$WT_TARGET" 'exit' || spawn_refuse_claimed_worktree "$first" "$inspect_target"
+  for _ in $(seq 1 10); do
+    path=$(spawn_current_path "$WT_TARGET" || true)
+    [ -z "$path" ] || [ "$(real_path_or_raw "$path")" = "$wt_real" ] || break
+    sleep 0.5
+  done
+  free=$( (cd "$PROJ_ABS" && treehouse status --json) 2>/dev/null \
+    | grep -Eo '"status"[[:space:]]*:[[:space:]]*"available"' | wc -l | tr -d ' ') || free=0
+  for ((i = 0; i < free; i++)); do
+    path=$( (cd "$PROJ_ABS" && treehouse get --lease --no-fetch --lease-holder "$holder") 2>/dev/null </dev/null) || break
+    [ -n "$path" ] || break
+    rc=0
+    if [ "$(dirname "$(dirname "$(real_path_or_raw "$path")")")" != "$pool" ]; then
+      rc=2
+    else
+      collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$path" "$STATE") || rc=$?
+    fi
+    if [ "$rc" = 0 ]; then
+      held+=("$path")
+      continue
+    fi
+    spawn_return_treehouse_lease "$holder" "$path"
+    [ "$rc" != 1 ] || offered=$path
+    break
+  done
+  rc=0
+  if [ -z "$offered" ] || ! spawn_send_text_line "$WT_TARGET" 'treehouse get'; then
+    rc=1
+  elif ! spawn_await_treehouse_slot; then
+    rc=2
+  fi
+  for path in ${held[@]+"${held[@]}"}; do
+    spawn_return_treehouse_lease "$holder" "$path"
+  done
+  case "$rc" in
+    0) ;;
+    1) spawn_refuse_claimed_worktree "$first" "$inspect_target" ;;
+    *) exit 1 ;;
+  esac
+}
+
+spawn_return_treehouse_lease() { # <holder> <path>
+  (cd "$PROJ_ABS" && treehouse return --if-lease-holder "$1" "$2") </dev/null >/dev/null 2>&1 \
+    || echo "warning: could not return the Treehouse slot $2 that task $ID's spawn held under lease $1; release it with: treehouse return $2" >&2
 }
 
 validate_spawn_worktree() { # <source> <inspect-target>
@@ -4268,31 +4363,8 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # misconfiguration would need machinery this path does not want - so the
   # refusal has to be self-explaining instead: carry the last path seen and the
   # reason it was rejected, and report both at the deadline.
-  candidate=""
-  last_seen=""
-  last_reason="the pane reported no path"
-  for _ in $(seq 1 60); do
-    p=$(spawn_current_path "$WT_TARGET" || true)
-    [ -z "$p" ] || last_seen="$p"
-    if [ -n "$p" ] && spawn_worktree_isolated "$p"; then
-      p_real=$(real_path_or_raw "$p")
-      last_reason="it is an isolated worktree, but no second read agreed with it"
-      if [ -n "$candidate" ] && [ "$p_real" = "$candidate" ]; then
-        WT="$p"
-        break
-      fi
-      candidate="$p_real"
-    else
-      candidate=""
-      [ -z "$p" ] || last_reason=$SPAWN_WT_REASON
-    fi
-    sleep 1
-  done
-  if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
-    exit 1
-  fi
-
+  spawn_await_treehouse_slot || exit 1
+  spawn_skip_claimed_treehouse_slot "$T"
   validate_spawn_worktree "treehouse get" "$T"
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
