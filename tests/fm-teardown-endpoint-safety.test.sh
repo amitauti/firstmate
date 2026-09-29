@@ -585,6 +585,82 @@ test_cross_home_pool_slot_collision_refuses() {
   pass "fm-teardown: a pool slot held by another firstmate home is never returned"
 }
 
+write_shared_slot_records() {  # <case> <stale-id> <live-id>
+  local dir=$1 id=$2 other=$3
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship" "branch=fm/$id"
+  fm_write_meta "$dir/home/state/$other.meta" \
+    "window=firstmate:fm-$other" "endpoint_task_id=$other" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship" "branch=fm/$other"
+}
+
+run_case_unforced() {  # <case> <id>
+  local dir=$1 id=$2
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$id"
+}
+
+test_stale_record_on_another_tasks_copy_closes_without_returning_the_slot() {
+  local dir id=stale-a other=live-b rc before
+  dir=$(make_case slot-owned-by-other)
+  mark_case_as_treehouse_pool "$dir"
+  git -C "$dir/worktree" checkout -q -b "fm/$other"
+  write_shared_slot_records "$dir" "$id" "$other"
+  before=$(cat "$dir/home/state/$other.meta")
+
+  set +e
+  run_case_unforced "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "teardown of a stale record on another task's copy failed: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "the stale task's record was not closed"
+  [ "$(cat "$dir/home/state/$other.meta")" = "$before" ] || fail "the owning task's record was changed"
+  assert_present "$dir/worktree/sentinel" "the owning task's copy was reset"
+  [ "$(git -C "$dir/worktree" symbolic-ref --short HEAD)" = "fm/$other" ] \
+    || fail "the owning task's copy was moved off its branch"
+  ! grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "the owning task's slot was returned to the pool: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "not returned to the pool" "teardown must say the slot was not recycled"
+  assert_contains "$(cat "$dir/stdout")" "left with task $other" "teardown must say which task keeps the slot"
+  pass "fm-teardown: a stale record on another task's copy is closed while the slot stays with its owner"
+}
+
+test_shared_slot_without_established_ownership_refuses() {
+  local dir id=stale-a other=live-b rc
+  dir=$(make_case slot-owner-unreadable)
+  mark_case_as_treehouse_pool "$dir"
+  write_shared_slot_records "$dir" "$id" "$other"
+  set +e
+  run_case_unforced "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown closed a record whose copy's owner could not be established"
+  assert_present "$dir/home/state/$id.meta" "a refused teardown removed the stale task's record"
+  assert_present "$dir/home/state/$other.meta" "a refused teardown removed the other task's record"
+  assert_present "$dir/worktree/sentinel" "a refused teardown reset the shared copy"
+  [ ! -s "$dir/runtime.log" ] || fail "a refused teardown reached the runtime: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/stderr")" "cannot be read" "the refusal must name the unreadable branch"
+  assert_contains "$(cat "$dir/stderr")" "cannot be established" "the refusal must say ownership was not established"
+
+  dir=$(make_case slot-owner-unlanded)
+  mark_case_as_treehouse_pool "$dir"
+  git -C "$dir/project" -c user.name=test -c user.email=test@example.invalid \
+    commit --allow-empty -qm unlanded-work
+  git -C "$dir/project" branch "fm/$id"
+  git -C "$dir/worktree" checkout -q -b "fm/$other"
+  write_shared_slot_records "$dir" "$id" "$other"
+  set +e
+  run_case_unforced "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown closed a stale record whose own branch still has unlanded commits"
+  assert_present "$dir/home/state/$id.meta" "an unlanded-work refusal removed the stale task's record"
+  assert_contains "$(cat "$dir/stderr")" "unlanded-work" "the refusal must list the unlanded commit"
+  pass "fm-teardown: a shared slot refuses when ownership is unproven or this task's own work has not landed"
+}
+
 test_sole_slot_record_still_tears_down() {
   local dir id=sole-task worker
 
@@ -1402,6 +1478,8 @@ test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
+test_stale_record_on_another_tasks_copy_closes_without_returning_the_slot
+test_shared_slot_without_established_ownership_refuses
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_own_and_absent_slot_claims_still_tear_down
 test_recorded_endpoint_that_changed_directory_still_tears_down

@@ -2308,15 +2308,22 @@ teardown_live_slot_path() {
 }
 
 require_exclusive_worktree_slot_record() {
-  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4
-  local slot collision rc=0
+  local record_meta=$1 record_id=$2 record_state=$3 worktree=$4 leave_to_owner=${5:-0}
+  local slot collision other_id other_wt rc=0
   slot=$(canonical_existing_dir "$worktree") || return 0
   collision=$(fm_meta_find_colliding_worktree "$record_meta" "$slot" "$record_state") || rc=$?
   case "$rc" in
     0)
-      echo "REFUSED: task $record_id's recorded worktree $slot is also task ${collision%%|*}'s recorded worktree (${collision#*|})." >&2
-      echo "Returning that pool slot would kill ${collision%%|*}'s processes and reset its copy, so nothing was changed - not even with --force." >&2
-      echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh ${collision%%|*}), then re-run teardown." >&2
+      if [ "$leave_to_owner" = 1 ]; then
+        leave_worktree_slot_to_owner "$slot" "$collision"
+        return
+      fi
+      other_id=${collision%%|*}
+      other_wt=${collision#*|}
+      other_wt=${other_wt%|*}
+      echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded worktree ($other_wt)." >&2
+      echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
+      echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
       return 1 ;;
     1) return 0 ;;
     *)
@@ -2325,10 +2332,58 @@ require_exclusive_worktree_slot_record() {
   esac
 }
 
+# This task's record and another task's record both name <slot>. When the copy
+# is positively the other task's - it is checked out on the other task's
+# recorded branch, not this task's - this record is the stale one: teardown
+# closes only this task's record and leaves the slot, its copy, and the other
+# task's record untouched, never returning the slot to the pool. Anything short
+# of that proof refuses, and so does any commit on this task's own branch that
+# is not on a remote, whatever --force says.
+leave_worktree_slot_to_owner() {  # <slot> <collision>
+  local slot=$1 other_id=${2%%|*} other_meta=${2##*|} copy_br task_br other_br unlanded default
+  local -a landed=(--remotes)
+  task_br=$(meta_value "$META" branch)
+  other_br=$(fm_meta_get "$other_meta" branch)
+  if ! copy_br=$(git -C "$slot" symbolic-ref --quiet --short HEAD 2>/dev/null) || [ -z "$copy_br" ]; then
+    echo "REFUSED: task $ID's recorded worktree $slot is also task $other_id's recorded worktree, and the branch checked out in it cannot be read, so which task owns that copy cannot be established; nothing was changed - not even with --force." >&2
+    echo "Read both tasks (bin/fm-crew-state.sh $ID; bin/fm-crew-state.sh $other_id), then re-run teardown once the copy is on its owning task's branch." >&2
+    return 1
+  fi
+  if [ "$copy_br" = "$task_br" ]; then
+    echo "REFUSED: task $ID's recorded worktree $slot is also task $other_id's recorded worktree, and it is on task $ID's own branch '$copy_br', so returning it would reset a copy task $other_id's record still names; nothing was changed - not even with --force." >&2
+    echo "Read task $other_id (bin/fm-crew-state.sh $other_id); when it is the stale one, close it first with bin/fm-teardown.sh $other_id, then re-run teardown." >&2
+    return 1
+  fi
+  if [ -z "$other_br" ] || [ "$copy_br" != "$other_br" ]; then
+    echo "REFUSED: task $ID's recorded worktree $slot is also task $other_id's recorded worktree, and its branch '$copy_br' establishes neither task as its owner (task $ID records '${task_br:-<none>}', task $other_id records '${other_br:-<none>}'); nothing was changed - not even with --force." >&2
+    echo "Read both tasks (bin/fm-crew-state.sh $ID; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+    return 1
+  fi
+  if [ -n "$task_br" ] && git -C "$slot" rev-parse --quiet --verify "refs/heads/$task_br" >/dev/null 2>&1; then
+    if [ "$MODE" = local-only ] && default=$(default_branch); then
+      landed+=("refs/heads/$default")
+    fi
+    if ! unlanded=$(git -C "$slot" log --oneline "refs/heads/$task_br" --not "${landed[@]}" -- 2>/dev/null); then
+      echo "REFUSED: cannot inspect task $ID's branch '$task_br' for unlanded commits; nothing was changed." >&2
+      return 1
+    fi
+    if [ -n "$unlanded" ]; then
+      echo "REFUSED: task $ID's branch '$task_br' has commits that have not landed:" >&2
+      printf '%s\n' "$unlanded" | head -5 >&2
+      echo "Push or land them, then re-run teardown; nothing was changed." >&2
+      return 1
+    fi
+  fi
+  echo "warning: task $ID's recorded worktree $slot is task $other_id's copy - it is on $other_id's recorded branch '$copy_br' - so only $ID's own record is closed; the slot, its copy, and task $other_id's record are left untouched, and the slot is not returned to the pool." >&2
+  TEARDOWN_SLOT_REASSIGNED=1
+  TEARDOWN_SLOT_REASSIGNED_TO=$other_id
+  TEARDOWN_SLOT_REASSIGNED_HOME=
+}
+
 require_exclusive_task_worktree_slot() {
   local slot
   slot=$(teardown_live_slot_path) || return 0
-  require_exclusive_worktree_slot_record "$META" "$ID" "$STATE" "$slot"
+  require_exclusive_worktree_slot_record "$META" "$ID" "$STATE" "$slot" 1
 }
 
 # Positive slot ownership, read from the claim the task that took the slot wrote
@@ -3527,7 +3582,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   fi
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
 elif [ "$KIND" != secondmate ] && ! teardown_owns_worktree; then
-  :
+  fm_treehouse_slot_owner_release "$WT" "$ID"
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
@@ -3786,6 +3841,6 @@ if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
 elif teardown_owns_worktree; then
   echo "teardown $ID complete (window ${T:-none}, worktree $WT)"
 else
-  echo "teardown $ID complete (window ${T:-none}; pool slot $WT left to task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)}, which it was reassigned to)"
+  echo "teardown $ID complete (window ${T:-none}; pool slot $WT left with task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)} and not returned to the pool)"
 fi
 backlog_refresh_reminder

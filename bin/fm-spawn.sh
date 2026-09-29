@@ -3248,8 +3248,13 @@ spawn_worktree_isolated() { # <path>
 }
 
 spawn_refuse_claimed_worktree() { # <collision> [inspect-target]
-  local other_id=${1%%|*} other_wt=${1#*|} inspect_target=${2:-}
-  echo "error: task $ID's allocated worktree $WT is already task $other_id's recorded copy ($other_wt); refusing to launch into a colliding worktree. Read task $other_id's current state with bin/fm-crew-state.sh $other_id, and close it with bin/fm-teardown.sh $other_id once its work has landed, then spawn again${inspect_target:+; inspect window $inspect_target}" >&2
+  local other_id=${1%%|*} other_wt=${1#*|} inspect_target=${2:-} what=allocated retry="spawn again"
+  other_wt=${other_wt%|*}
+  if [ "$RELAUNCH" -eq 1 ]; then
+    what=recorded
+    retry="relaunch again"
+  fi
+  echo "error: task $ID's $what worktree $WT is also task $other_id's recorded copy ($other_wt); refusing to launch into a colliding worktree. Read task $other_id's current state with bin/fm-crew-state.sh $other_id; when task $other_id is the stale one, close it with bin/fm-teardown.sh $other_id (it leaves a copy on another task's branch with that task), then $retry${inspect_target:+; inspect window $inspect_target}" >&2
   exit 1
 }
 

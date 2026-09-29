@@ -569,7 +569,8 @@ fm_backend_meta_for_window() {  # <target> <state-dir>
 # local firstmate home (collect_local_firstmate_states, bin/fm-wake-lib.sh)
 # already names <worktree> in worktree= or home=. <record-meta> is this task's
 # own record, skipped by identity whether or not it exists yet.
-# If found, prints "<colliding-task-id>|<recorded-path>" and returns 0.
+# If found, prints "<colliding-task-id>|<recorded-path>|<colliding-record>" and
+# returns 0.
 # Returns 1 when no other record names it, and 2 when the local homes cannot be
 # enumerated (the reason is on stderr).
 fm_meta_find_colliding_worktree() {  # <record-meta> <worktree> <state-dir>
@@ -589,7 +590,7 @@ fm_meta_find_colliding_worktree() {  # <record-meta> <worktree> <state-dir>
         [ -n "$other_path" ] || continue
         other_real=$(cd "$other_path" 2>/dev/null && pwd -P) || other_real=$other_path
         if [ "$other_path" = "$worktree" ] || [ "$other_real" = "$wt_real" ]; then
-          printf '%s|%s\n' "$other_id" "$other_path"
+          printf '%s|%s|%s\n' "$other_id" "$other_path" "$meta"
           return 0
         fi
       done
