@@ -1049,14 +1049,16 @@ fi
 
 # --- run-step authoritative path -------------------------------------------
 
-# The other task in any local home whose record names <branch>, with its home
-# when that is not this one, or nothing.
+# The other task on this task's project, in any local home, whose record names
+# <branch>, as <id>|<home> with <home> empty when it is this home, or nothing.
 branch_owner_task() {  # <branch>
-  local state_dir meta other_id other_br
+  local state_dir meta other_id other_br project other_project
   if ! command -v collect_local_firstmate_states >/dev/null 2>&1; then
     # shellcheck source=bin/fm-wake-lib.sh
     . "$SCRIPT_DIR/fm-wake-lib.sh" 2>/dev/null
   fi
+  project=$(meta_value project)
+  project=$(cd "$project" 2>/dev/null && pwd -P) || project=$(meta_value project)
   TREEHOUSE_OWNER_STATES=("$STATE")
   collect_local_firstmate_states "$STATE" 2>/dev/null || true
   for state_dir in "${TREEHOUSE_OWNER_STATES[@]}"; do
@@ -1066,13 +1068,16 @@ branch_owner_task() {  # <branch>
       other_id=${meta##*/}
       other_id=${other_id%.meta}
       [ "$state_dir" != "$STATE" ] || [ "$other_id" != "$ID" ] || continue
+      other_project=$(fm_meta_get "$meta" project)
+      other_project=$(cd "$other_project" 2>/dev/null && pwd -P) || other_project=$(fm_meta_get "$meta" project)
+      [ "$other_project" = "$project" ] || continue
       other_br=$(fm_meta_get "$meta" branch)
       [ -n "$other_br" ] || other_br="fm/$other_id"
       if [ "$other_br" = "$1" ]; then
         if [ "$state_dir" = "$STATE" ]; then
-          printf '%s\n' "$other_id"
+          printf '%s|\n' "$other_id"
         else
-          printf '%s (home %s)\n' "$other_id" "${state_dir%/*}"
+          printf '%s|%s\n' "$other_id" "${state_dir%/*}"
         fi
         return 0
       fi
@@ -1081,11 +1086,23 @@ branch_owner_task() {  # <branch>
   return 1
 }
 
+# Splits a branch_owner_task answer into OWNER_ID, OWNER_NOTE (" (home <h>)"
+# for another home) and OWNER_CMD (the FM_HOME= prefix its commands need).
+describe_owner() {  # <id>|<home>
+  OWNER_ID=${1%%|*}
+  OWNER_NOTE=""
+  OWNER_CMD=""
+  if [ -n "${1#*|}" ]; then
+    OWNER_NOTE=" (home ${1#*|})"
+    OWNER_CMD="FM_HOME=${1#*|} "
+  fi
+}
+
 assert_run_belongs_to_task() {
   # A run binds to this task only when its branch, the copy's branch, and this
-  # task's recorded branch are proven identical and no other record claims that
-  # branch; anything less reads unknown - never as another lane's done,
-  # checks-green or PR.
+  # task's recorded branch are proven identical and no other record on this
+  # project claims that branch; anything less reads unknown - never as another
+  # lane's done, checks-green or PR.
   local task_br run_br owner detail
   task_br=$(meta_value branch)
   [ -n "$task_br" ] \
@@ -1095,7 +1112,8 @@ assert_run_belongs_to_task() {
   if [ "$CREW_BRANCH" != "$task_br" ]; then
     detail="$WT is on branch '$CREW_BRANCH', not task $ID's recorded branch '$task_br'"
     if owner=$(branch_owner_task "$CREW_BRANCH"); then
-      detail="$detail; that copy belongs to task $owner, so its run and PR are not task $ID's - when task $ID is the stale one, close it with bin/fm-teardown.sh $ID"
+      describe_owner "$owner"
+      detail="$detail; that copy belongs to task $OWNER_ID$OWNER_NOTE (${OWNER_CMD}bin/fm-crew-state.sh $OWNER_ID), so its run and PR are not task $ID's - when task $ID is the stale one, close it with bin/fm-teardown.sh $ID"
     fi
     emit unknown run-step "$detail"
   fi
@@ -1104,13 +1122,15 @@ assert_run_belongs_to_task() {
     if [ "$run_br" != "$task_br" ]; then
       detail="run branch '$run_br' is not task $ID's recorded branch '$task_br'"
       if owner=$(branch_owner_task "$run_br"); then
-        detail="$detail; that run belongs to task $owner"
+        describe_owner "$owner"
+        detail="$detail; that run belongs to task $OWNER_ID$OWNER_NOTE (${OWNER_CMD}bin/fm-crew-state.sh $OWNER_ID)"
       fi
       emit unknown run-step "$detail"
     fi
   fi
   if owner=$(branch_owner_task "$task_br"); then
-    emit unknown run-step "task $ID's recorded branch '$task_br' is also recorded by task $owner, so its run cannot be bound; read both tasks and close the stale one with bin/fm-teardown.sh <stale-id>"
+    describe_owner "$owner"
+    emit unknown run-step "task $ID's recorded branch '$task_br' is also recorded by task $OWNER_ID$OWNER_NOTE, so its run cannot be bound; read both tasks (bin/fm-crew-state.sh $ID; ${OWNER_CMD}bin/fm-crew-state.sh $OWNER_ID) and close the stale one with bin/fm-teardown.sh $ID or ${OWNER_CMD}bin/fm-teardown.sh $OWNER_ID"
   fi
 }
 
