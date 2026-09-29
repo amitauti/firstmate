@@ -641,19 +641,15 @@ do_exit() {
   # authoritative proof is the agent-state wait below. The retried Enter still
   # matters, because a slash command opens a completion popup on some TUIs that
   # swallows the first Enter.
-  local submit_err submit_rc=0 err_detail="" verdict reason
+  local submit_err err_detail="" verdict reason
   submit_err=$(mktemp "${TMPDIR:-/tmp}/fm-control-submit-err.XXXXXX") \
     || die "could not create a temp file under ${TMPDIR:-/tmp} to capture the exit submission's errors, so the $cmd exit command was not sent to task $ID; make that directory writable, then retry '$VERB'"
-  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>"$submit_err") || submit_rc=$?
+  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>"$submit_err") \
+    || verdict=send-failed
   if [ -s "$submit_err" ]; then
     err_detail=$(tr '\n' ' ' < "$submit_err" | sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//')
   fi
   rm -f "$submit_err"
-  if [ "$submit_rc" -ne 0 ]; then
-    reason="transport error"
-    [ -z "$err_detail" ] || reason="transport error: $err_detail"
-    die "the exit command could not be sent to task $ID on $BACKEND ($reason); verify endpoint $T is accessible, then retry '$VERB'"
-  fi
   if [ "$verdict" = send-failed ]; then
     reason="submission verdict is 'send-failed'"
     [ -z "$err_detail" ] || reason="submission verdict is 'send-failed': $err_detail"
