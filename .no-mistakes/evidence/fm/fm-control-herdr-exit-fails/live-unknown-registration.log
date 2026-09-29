@@ -1,0 +1,25 @@
+lab session: fm-lab-unkreg-3644166-14791
+=== case A: registration agent_status=unknown over a SHELL-ONLY pane (agent process gone, registration lingers) ===
+herdr agent get: {"agent":"claude","status":"unknown"}
+pane process state: shell
+HEAD classifier: pane_agent_state=stale-agent agent_state=dead
+BASE classifier: pane_agent_state=unknown agent_state=unreadable
+--- BASE: fm-control.sh lx exit ---
+error: task lx's endpoint reads 'unreadable' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint
+rc=1
+--- HEAD: fm-control.sh lx exit ---
+already-stopped lx harness=claude backend=herdr endpoint=fm-lab-unkreg-3644166-14791:w1:p2 worktree=/tmp/fm-lab.ZM7pTq/wt
+rc=0
+
+=== case B (adversarial): registration agent_status=unknown over a LIVE agent-named process must NOT read dead ===
+herdr agent get: {"agent":"claude","status":"unknown"}
+pane process state: agent
+HEAD classifier: pane_agent_state=unknown agent_state=unreadable
+BASE classifier: pane_agent_state=unknown agent_state=unreadable
+--- BASE: fm-control.sh lx exit (live agent, unknown registration) ---
+error: task lx's endpoint reads 'unreadable' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint
+rc=1
+--- HEAD: fm-control.sh lx exit (live agent, unknown registration) ---
+error: task lx's endpoint reads 'unreadable' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint
+rc=1
+agent-named process still running after refusal: agent
