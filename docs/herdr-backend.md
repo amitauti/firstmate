@@ -688,7 +688,8 @@ It uses the shared harness-process classifier in `bin/fm-agent-process-lib.sh`, 
 The settle window exists because an idle shell transiently hosts prompt helpers such as starship in its foreground group.
 The first agent or shell sample in that window decides.
 
-No registered status outranks the process view, because an agent killed mid-turn leaves `working` behind just as a quit one leaves `idle`.
+No registered status, recognized or not, outranks the process view, because an agent killed mid-turn leaves `working` behind just as a quit one leaves `idle`.
+A registration with a status other than `working`, `idle`, `done`, or `blocked` never reads live: it is `stale-agent` over a shell-only pane and `unknown` otherwise, and an `agent get` response without a parsed registration reads `unknown`.
 The native busy verdict is verified the same way, so a shell-only pane never reads busy.
 
 ### Process-view version support
