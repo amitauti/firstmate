@@ -653,7 +653,7 @@ do_exit() {
   if [ "$verdict" = send-failed ]; then
     reason="submission verdict is 'send-failed'"
     [ -z "$err_detail" ] || reason="submission verdict is 'send-failed': $err_detail"
-    die "the exit command could not be sent to task $ID on $BACKEND ($reason); inspect endpoint $T to ensure its composer is clear and responsive, then retry '$VERB'"
+    die "the exit command could not be sent to task $ID on $BACKEND ($reason); inspect endpoint $T to ensure it is reachable and its composer is clear and responsive, then retry '$VERB'"
   fi
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
     die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"

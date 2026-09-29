@@ -1254,7 +1254,7 @@ test_exit_failed_submission_refuses_with_observed_state_and_next_step() {
   expect_code 1 "$rc" "exit should refuse when submit verdict is send-failed"
   assert_contains "$out" "the exit command could not be sent to task t1 on herdr (submission verdict is 'send-failed')" \
     "refusal should name the send-failed verdict"
-  assert_contains "$out" "inspect endpoint default:w1:p1 to ensure its composer is clear and responsive, then retry 'exit'" \
+  assert_contains "$out" "inspect endpoint default:w1:p1 to ensure it is reachable and its composer is clear and responsive, then retry 'exit'" \
     "refusal should name concrete next step"
   assert_not_contains "$out" "the exit command could not be sent to task t1 on herdr
 " \
@@ -1270,7 +1270,7 @@ test_exit_failed_submission_refuses_with_observed_state_and_next_step() {
   expect_code 1 "$rc" "exit should refuse when transport fails"
   assert_contains "$out" "the exit command could not be sent to task t1 on herdr (submission verdict is 'send-failed': herdr: transport failure: socket closed)" \
     "refusal should report send-failed with transport failure detail"
-  assert_contains "$out" "inspect endpoint default:w1:p1 to ensure its composer is clear and responsive, then retry 'exit'" \
+  assert_contains "$out" "inspect endpoint default:w1:p1 to ensure it is reachable and its composer is clear and responsive, then retry 'exit'" \
     "refusal should name concrete next step"
   assert_not_contains "$out" "the exit command could not be sent to task t1 on herdr
 " \
