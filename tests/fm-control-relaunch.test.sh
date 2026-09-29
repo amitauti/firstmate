@@ -43,9 +43,9 @@ TASK_TMPS=()
 relaunch_cleanup() {
   local d
   for d in "${TASK_TMPS[@]:-}"; do
-    [ -n "$d" ] && rm -rf "$d"
+    [ -n "$d" ] && fm_test_remove_tree "$d"
   done
-  rm -rf "$TMP_ROOT"
+  fm_test_remove_tree "$TMP_ROOT"
 }
 trap relaunch_cleanup EXIT
 
@@ -1280,6 +1280,9 @@ EOF
   out=$(run_control "$dir" rl10d relaunch --note "x"); rc=$?
   expect_code 1 "$rc" "a relaunch into a worktree another local home's task records should refuse"
   assert_contains "$out" "task sm-colliding's recorded copy" "the refusal should name the other home's task"
+  assert_contains "$out" "in home $dir/sm" "the refusal should name the other home"
+  assert_contains "$out" "FM_HOME=$dir/sm bin/fm-crew-state.sh sm-colliding" "the remediation should include FM_HOME for reading"
+  assert_contains "$out" "FM_HOME=$dir/sm bin/fm-teardown.sh sm-colliding" "the remediation should include FM_HOME for teardown"
   [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused relaunch must not stop the agent"
   [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch must send nothing"
   pass "fm-control relaunch: a worktree claimed in a local secondmate home refuses before the agent is touched"
@@ -2172,6 +2175,8 @@ test_herdr_relaunch_resumes_only_the_registered_pi_session() {
       return 0
     }
     dir=$HERDR_CASE_DIR
+    printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
+    chmod +x "$dir/fakebin/pi"
     rm -f "$dir/fake/herdr-stopped"
     sed -i 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
     # Keep the pane's status authority registered to an existing Pi session,

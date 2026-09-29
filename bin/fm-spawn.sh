@@ -3255,13 +3255,20 @@ spawn_worktree_isolated() { # <path>
 }
 
 spawn_refuse_claimed_worktree() { # <collision> [inspect-target]
-  local other_id=${1%%|*} other_wt=${1#*|} inspect_target=${2:-} what=allocated retry="spawn again"
+  local other_id=${1%%|*} other_wt=${1#*|} other_meta=${1##*|} inspect_target=${2:-} what=allocated retry="spawn again"
   other_wt=${other_wt%|*}
+  local other_state other_home cmd_prefix="" home_note=""
+  other_state=${other_meta%/*}
+  other_home=${other_state%/*}
+  if [ -n "$other_home" ] && [ "$other_state" != "$STATE" ]; then
+    cmd_prefix="FM_HOME=$other_home "
+    home_note=" in home $other_home"
+  fi
   if [ "$RELAUNCH" -eq 1 ]; then
     what=recorded
     retry="relaunch again"
   fi
-  echo "error: task $ID's $what worktree $WT is also task $other_id's recorded copy ($other_wt); refusing to launch into a colliding worktree. Read task $other_id's current state with bin/fm-crew-state.sh $other_id; when task $other_id is the stale one, close it with bin/fm-teardown.sh $other_id (it leaves a copy on another task's branch with that task), then $retry${inspect_target:+; inspect window $inspect_target}" >&2
+  echo "error: task $ID's $what worktree $WT is also task $other_id's recorded copy ($other_wt$home_note); refusing to launch into a colliding worktree. Read task $other_id's current state with ${cmd_prefix}bin/fm-crew-state.sh $other_id; when task $other_id is the stale one, close it with ${cmd_prefix}bin/fm-teardown.sh $other_id (it leaves a copy on another task's branch with that task), then $retry${inspect_target:+; inspect window $inspect_target}" >&2
   exit 1
 }
 

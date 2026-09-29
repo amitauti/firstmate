@@ -870,14 +870,23 @@ safe_checkpoint() {
   CHECKPOINT_LINES=()
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
-  local collision other_id other_wt rc=0
+  local collision other_id other_wt other_meta other_state other_home cmd_prefix="" home_note="" rc=0
   collision=$(fm_meta_find_colliding_worktree "$STATE/$ID.meta" "$WT" "$STATE") || rc=$?
   case "$rc" in
     0)
       other_id=${collision%%|*}
       other_wt=${collision#*|}
       other_wt=${other_wt%|*}
-      die "task $ID's recorded worktree $WT is also task $other_id's recorded copy ($other_wt); refusing to relaunch into a colliding worktree. Read task $other_id's current state with bin/fm-crew-state.sh $other_id; when task $other_id is the stale one, close it with bin/fm-teardown.sh $other_id (it leaves a copy on task $ID's branch with task $ID), then relaunch again" ;;
+      other_meta=${collision##*|}
+      other_state=${other_meta%/*}
+      other_home=${other_state%/*}
+      cmd_prefix=""
+      home_note=""
+      if [ -n "$other_home" ] && [ "$other_state" != "$STATE" ]; then
+        cmd_prefix="FM_HOME=$other_home "
+        home_note=" in home $other_home"
+      fi
+      die "task $ID's recorded worktree $WT is also task $other_id's recorded copy ($other_wt$home_note); refusing to relaunch into a colliding worktree. Read task $other_id's current state with ${cmd_prefix}bin/fm-crew-state.sh $other_id; when task $other_id is the stale one, close it with ${cmd_prefix}bin/fm-teardown.sh $other_id (it leaves a copy on task $ID's branch with task $ID), then relaunch again" ;;
     1) ;;
     *) die "cannot check whether task $ID's recorded worktree $WT is claimed by another local Firstmate home's task; refusing to relaunch" ;;
   esac

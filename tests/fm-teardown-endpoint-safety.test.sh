@@ -607,6 +607,7 @@ test_stale_record_on_another_tasks_copy_closes_without_returning_the_slot() {
   dir=$(make_case slot-owned-by-other)
   mark_case_as_treehouse_pool "$dir"
   git -C "$dir/worktree" checkout -q -b "fm/$other"
+  git -C "$dir/worktree" branch "fm/$id"
   write_shared_slot_records "$dir" "$id" "$other"
   before=$(cat "$dir/home/state/$other.meta")
 
@@ -627,6 +628,38 @@ test_stale_record_on_another_tasks_copy_closes_without_returning_the_slot() {
   pass "fm-teardown: a stale record on another task's copy is closed while the slot stays with its owner"
 }
 
+test_stale_record_on_another_tasks_copy_closes_when_squash_merged() {
+  local dir id=stale-a other=live-b rc
+  dir=$(make_case slot-squash-merged)
+  mark_case_as_treehouse_pool "$dir"
+
+  # Commit work on fm/$id
+  git -C "$dir/worktree" checkout -q -b "fm/$id"
+  echo "squashed change" > "$dir/worktree/feature.txt"
+  git -C "$dir/worktree" add feature.txt
+  git -C "$dir/worktree" -c user.name=test -c user.email=test@example.invalid \
+    commit -qm "feature work"
+
+  # Now simulate squash-merge into project master and push/fetch to origin/master
+  echo "squashed change" > "$dir/project/feature.txt"
+  git -C "$dir/project" add feature.txt
+  git -C "$dir/project" -c user.name=test -c user.email=test@example.invalid \
+    commit -qm "Squash feature work"
+
+  # Now switch the slot to fm/$other
+  git -C "$dir/worktree" checkout -q -b "fm/$other"
+  write_shared_slot_records "$dir" "$id" "$other"
+
+  set +e
+  run_case_unforced "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "teardown of squash-merged work should succeed via content_in_default: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$id.meta" "the stale task's record was not closed"
+  assert_contains "$(cat "$dir/stderr")" "not returned to the pool" "teardown must say the slot was not recycled"
+  pass "fm-teardown: a stale record whose work landed via squash merge closes safely"
+}
+
 test_shared_slot_without_established_ownership_refuses() {
   local dir id=stale-a other=live-b rc
   dir=$(make_case slot-owner-unreadable)
@@ -644,11 +677,26 @@ test_shared_slot_without_established_ownership_refuses() {
   assert_contains "$(cat "$dir/stderr")" "cannot be read" "the refusal must name the unreadable branch"
   assert_contains "$(cat "$dir/stderr")" "cannot be established" "the refusal must say ownership was not established"
 
+  # Case: slot is on fm/$other, but fm/$id cannot be resolved in $slot
+  dir=$(make_case slot-missing-branch)
+  mark_case_as_treehouse_pool "$dir"
+  git -C "$dir/worktree" checkout -q -b "fm/$other"
+  write_shared_slot_records "$dir" "$id" "$other"
+  set +e
+  run_case_unforced "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown closed a stale record whose branch could not be resolved"
+  assert_present "$dir/home/state/$id.meta" "refusal must preserve stale record"
+  assert_contains "$(cat "$dir/stderr")" "cannot be resolved" "refusal must state branch cannot be resolved"
+
   dir=$(make_case slot-owner-unlanded)
   mark_case_as_treehouse_pool "$dir"
-  git -C "$dir/project" -c user.name=test -c user.email=test@example.invalid \
-    commit --allow-empty -qm unlanded-work
-  git -C "$dir/project" branch "fm/$id"
+  git -C "$dir/worktree" checkout -q -b "fm/$id"
+  echo "unlanded work" > "$dir/worktree/unlanded.txt"
+  git -C "$dir/worktree" add unlanded.txt
+  git -C "$dir/worktree" -c user.name=test -c user.email=test@example.invalid \
+    commit -qm unlanded-work
   git -C "$dir/worktree" checkout -q -b "fm/$other"
   write_shared_slot_records "$dir" "$id" "$other"
   set +e
@@ -657,7 +705,7 @@ test_shared_slot_without_established_ownership_refuses() {
   set -e
   [ "$rc" -ne 0 ] || fail "teardown closed a stale record whose own branch still has unlanded commits"
   assert_present "$dir/home/state/$id.meta" "an unlanded-work refusal removed the stale task's record"
-  assert_contains "$(cat "$dir/stderr")" "unlanded-work" "the refusal must list the unlanded commit"
+  assert_contains "$(cat "$dir/stderr")" "has commits that have not landed" "the refusal must state unlanded commits"
   pass "fm-teardown: a shared slot refuses when ownership is unproven or this task's own work has not landed"
 }
 
@@ -1479,6 +1527,7 @@ test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
 test_stale_record_on_another_tasks_copy_closes_without_returning_the_slot
+test_stale_record_on_another_tasks_copy_closes_when_squash_merged
 test_shared_slot_without_established_ownership_refuses
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_own_and_absent_slot_claims_still_tear_down

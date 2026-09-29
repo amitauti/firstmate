@@ -1503,8 +1503,10 @@ patch_id_for_commit() {
 }
 
 unpushed_patches_are_in_pr_head() {
-  local pr_head=$1 current base pr_patch_ids commit patch_id unpushed
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  local pr_head=$1 current=${2:-} base pr_patch_ids commit patch_id unpushed
+  if [ -z "$current" ]; then
+    current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  fi
   base=$(git -C "$WT" merge-base "$current" "$pr_head" 2>/dev/null) || return 1
   pr_patch_ids=$(
     git -C "$WT" log --format=%H "$base..$pr_head" -- 2>/dev/null \
@@ -1515,7 +1517,7 @@ unpushed_patches_are_in_pr_head() {
       | sort -u
   ) || return 1
   [ -n "$pr_patch_ids" ] || return 1
-  unpushed=$(git -C "$WT" log --format=%H HEAD --not --remotes -- 2>/dev/null) || return 1
+  unpushed=$(git -C "$WT" log --format=%H "$current" --not --remotes -- 2>/dev/null) || return 1
   [ -n "$unpushed" ] || return 1
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -1533,7 +1535,7 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target view state remainder head resolved_url current landed=0
+  local branch=$1 commit=${2:-HEAD} target view state remainder head resolved_url current landed=0
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
@@ -1553,10 +1555,10 @@ pr_is_merged() {
   esac
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
+  current=$(git -C "$WT" rev-parse --verify "$commit" 2>/dev/null) || return 1
   if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null; then
     landed=1
-  elif unpushed_patches_are_in_pr_head "$head"; then
+  elif unpushed_patches_are_in_pr_head "$head" "$current"; then
     landed=1
   fi
   [ "$landed" = 1 ] || return 1
@@ -1575,7 +1577,7 @@ pr_is_merged() {
 # "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
 # so the caller refuses rather than guesses.
 content_in_default() {
-  local name ref default_tree merged_tree
+  local target_commit=${1:-HEAD} name ref default_tree merged_tree
   name=$(default_branch) || return 1
   if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
@@ -1587,7 +1589,7 @@ content_in_default() {
   fi
   default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
-  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" "$target_commit" 2>/dev/null) || return 1
   merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
   [ "$merged_tree" = "$default_tree" ]
 }
@@ -1598,9 +1600,9 @@ content_in_default() {
 # default branch (fallback, which also covers the no-PR and gh-error paths). False
 # only for genuinely unlanded work.
 work_is_landed() {
-  local branch=$1
-  pr_is_merged "$branch" && return 0
-  content_in_default
+  local branch=$1 commit=${2:-HEAD}
+  pr_is_merged "$branch" "$commit" && return 0
+  content_in_default "$commit"
 }
 
 # The completion links this teardown already holds locally. A scout's
@@ -2326,9 +2328,16 @@ require_exclusive_worktree_slot_record() {
       other_id=${collision%%|*}
       other_wt=${collision#*|}
       other_wt=${other_wt%|*}
-      echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded worktree ($other_wt)." >&2
+      local other_meta=${collision##*|} other_state other_home cmd_prefix="" home_note=""
+      other_state=${other_meta%/*}
+      other_home=${other_state%/*}
+      if [ -n "$other_home" ] && [ "$other_state" != "$record_state" ]; then
+        cmd_prefix="FM_HOME=$other_home "
+        home_note=" (home $other_home)"
+      fi
+      echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded worktree ($other_wt$home_note)." >&2
       echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
-      echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+      echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; ${cmd_prefix}bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
       return 1 ;;
     1) return 0 ;;
     *)
@@ -2345,34 +2354,52 @@ require_exclusive_worktree_slot_record() {
 # of that proof refuses, and so does any commit on this task's own branch that
 # is not on a remote, whatever --force says.
 leave_worktree_slot_to_owner() {  # <slot> <collision>
-  local slot=$1 other_id=${2%%|*} other_meta=${2##*|} copy_br task_br other_br unlanded default
+  local slot=$1 other_id=${2%%|*} other_meta=${2##*|} copy_br task_br other_br unlanded default branch_ref
+  local other_state other_home cmd_prefix="" home_note=""
+  other_state=${other_meta%/*}
+  other_home=${other_state%/*}
+  if [ -n "$other_home" ] && [ "$other_state" != "$STATE" ]; then
+    cmd_prefix="FM_HOME=$other_home "
+    home_note=" (home $other_home)"
+  fi
   local -a landed=(--remotes)
   task_br=$(meta_value "$META" branch)
   other_br=$(fm_meta_get "$other_meta" branch)
   if ! copy_br=$(git -C "$slot" symbolic-ref --quiet --short HEAD 2>/dev/null) || [ -z "$copy_br" ]; then
     echo "REFUSED: task $ID's recorded worktree $slot is also task $other_id's recorded worktree, and the branch checked out in it cannot be read, so which task owns that copy cannot be established; nothing was changed - not even with --force." >&2
-    echo "Read both tasks (bin/fm-crew-state.sh $ID; bin/fm-crew-state.sh $other_id), then re-run teardown once the copy is on its owning task's branch." >&2
+    echo "Read both tasks (bin/fm-crew-state.sh $ID; ${cmd_prefix}bin/fm-crew-state.sh $other_id), then re-run teardown once the copy is on its owning task's branch." >&2
     return 1
   fi
   if [ "$copy_br" = "$task_br" ]; then
     echo "REFUSED: task $ID's recorded worktree $slot is also task $other_id's recorded worktree, and it is on task $ID's own branch '$copy_br', so returning it would reset a copy task $other_id's record still names; nothing was changed - not even with --force." >&2
-    echo "Read task $other_id (bin/fm-crew-state.sh $other_id); when it is the stale one, close it first with bin/fm-teardown.sh $other_id, then re-run teardown." >&2
+    echo "Read task $other_id$home_note (${cmd_prefix}bin/fm-crew-state.sh $other_id); when it is the stale one, close it first with ${cmd_prefix}bin/fm-teardown.sh $other_id, then re-run teardown." >&2
     return 1
   fi
   if [ -z "$other_br" ] || [ "$copy_br" != "$other_br" ]; then
     echo "REFUSED: task $ID's recorded worktree $slot is also task $other_id's recorded worktree, and its branch '$copy_br' establishes neither task as its owner (task $ID records '${task_br:-<none>}', task $other_id records '${other_br:-<none>}'); nothing was changed - not even with --force." >&2
-    echo "Read both tasks (bin/fm-crew-state.sh $ID; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+    echo "Read both tasks (bin/fm-crew-state.sh $ID; ${cmd_prefix}bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
     return 1
   fi
-  if [ -n "$task_br" ] && git -C "$slot" rev-parse --quiet --verify "refs/heads/$task_br" >/dev/null 2>&1; then
-    if [ "$MODE" = local-only ] && default=$(default_branch); then
-      landed+=("refs/heads/$default")
+  branch_ref=""
+  if [ -n "$task_br" ]; then
+    if git -C "$slot" rev-parse --quiet --verify "refs/heads/$task_br" >/dev/null 2>&1; then
+      branch_ref="refs/heads/$task_br"
     fi
-    if ! unlanded=$(git -C "$slot" log --oneline "refs/heads/$task_br" --not "${landed[@]}" -- 2>/dev/null); then
-      echo "REFUSED: cannot inspect task $ID's branch '$task_br' for unlanded commits; nothing was changed." >&2
-      return 1
-    fi
-    if [ -n "$unlanded" ]; then
+  fi
+  if [ -z "$branch_ref" ]; then
+    echo "REFUSED: task $ID's recorded branch '${task_br:-<none>}' cannot be resolved in $slot, so whether its work has landed cannot be established; nothing was changed - not even with --force." >&2
+    echo "Restore or fetch task $ID's branch into $slot, land its work, or reconcile its record; then re-run teardown." >&2
+    return 1
+  fi
+  if [ "$MODE" = local-only ] && default=$(default_branch); then
+    landed+=("refs/heads/$default")
+  fi
+  if ! unlanded=$(git -C "$slot" log --oneline "$branch_ref" --not "${landed[@]}" -- 2>/dev/null); then
+    echo "REFUSED: cannot inspect task $ID's branch '$task_br' for unlanded commits; nothing was changed." >&2
+    return 1
+  fi
+  if [ -n "$unlanded" ]; then
+    if ! work_is_landed "$task_br" "$branch_ref"; then
       echo "REFUSED: task $ID's branch '$task_br' has commits that have not landed:" >&2
       printf '%s\n' "$unlanded" | head -5 >&2
       echo "Push or land them, then re-run teardown; nothing was changed." >&2
@@ -2382,7 +2409,7 @@ leave_worktree_slot_to_owner() {  # <slot> <collision>
   echo "warning: task $ID's recorded worktree $slot is task $other_id's copy - it is on $other_id's recorded branch '$copy_br' - so only $ID's own record is closed; the slot, its copy, and task $other_id's record are left untouched, and the slot is not returned to the pool." >&2
   TEARDOWN_SLOT_REASSIGNED=1
   TEARDOWN_SLOT_REASSIGNED_TO=$other_id
-  TEARDOWN_SLOT_REASSIGNED_HOME=
+  TEARDOWN_SLOT_REASSIGNED_HOME=$other_home
 }
 
 require_exclusive_task_worktree_slot() {

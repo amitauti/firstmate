@@ -776,6 +776,45 @@ EOF
   pass "fm-spawn: refuses when allocated worktree is already claimed by another task"
 }
 
+test_spawn_refuses_when_allocated_worktree_claimed_by_secondmate_home() {
+  local rec id colliding_id sm_dir out status
+  id='pool-spawn-colsm-1'
+  colliding_id='pool-spawn-colsm-2'
+  rec=$(make_case spawn-colsm "$id")
+  read_case_record "$rec"
+  sm_dir="$CASE_DIR/sm"
+  mkdir -p "$sm_dir/state"
+  printf '%s\n' "- sm1 - secondmate (home: $sm_dir; scope: x; projects: proj; added 2026-09-28)" \
+    > "$HOME_DIR/data/secondmates.md"
+
+  # Record another task in secondmate claiming the pool worktree
+  cat > "$sm_dir/state/$colliding_id.meta" <<EOF
+window=test:fm-$colliding_id
+endpoint_task_id=$colliding_id
+worktree=$POOL_DIR
+project=$PROJECT_DIR
+harness=codex
+kind=ship
+mode=no-mistakes
+EOF
+
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  expect_code 1 "$status" \
+    "a spawn into a worktree claimed by a secondmate home's task must refuse"$'\n'"$out"
+  assert_contains "$out" "task $colliding_id's recorded copy" \
+    "refusal must name the colliding task"
+  assert_contains "$out" "in home $sm_dir" \
+    "refusal must name the secondmate home"
+  assert_contains "$out" "FM_HOME=$sm_dir bin/fm-crew-state.sh $colliding_id" \
+    "remediation must include FM_HOME for reading"
+  assert_contains "$out" "FM_HOME=$sm_dir bin/fm-teardown.sh $colliding_id" \
+    "remediation must include FM_HOME for teardown"
+  assert_absent "$HOME_DIR/state/$id.meta" \
+    "refused spawn must not publish metadata"
+  pass "fm-spawn: refuses with FM_HOME when allocated worktree is claimed by a secondmate task"
+}
+
 # Re-lay a case as a two-slot Treehouse pool whose allocation the fakes drive
 # statefully: the pane's `treehouse get` and a `get --lease` both take the first
 # slot that is neither leased nor occupied, the pane's `exit` leaves its slot,
@@ -922,6 +961,7 @@ test_spawn_refuses_when_every_free_slot_is_claimed() {
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_spawn_refuses_when_allocated_worktree_claimed_by_other_task
+test_spawn_refuses_when_allocated_worktree_claimed_by_secondmate_home
 test_spawn_skips_a_pool_slot_a_stale_record_claims
 test_spawn_refuses_when_every_free_slot_is_claimed
 test_linked_spawning_home_rejects_primary_before_refresh
