@@ -1,0 +1,14 @@
+# setup: pool slot 1 leased (live-b), slot 2 free but named by stale task stale-c's record
+$ bin/fm-spawn.sh probe $LAB/proj --scout --harness claude --backend tmux
+fm-gate-refuse: gate agent lifecycle permitted only against lab home $LAB
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+error: task probe's allocated worktree $LAB/pool/.treehouse/proj-215264/2/proj is also task stale-c's recorded copy ($LAB/pool/.treehouse/proj-215264/2/proj); refusing to launch into a colliding worktree. Read task stale-c's current state with bin/fm-crew-state.sh stale-c; when task stale-c is the stale one, close it with bin/fm-teardown.sh stale-c (it leaves a copy on another task's branch with that task), then spawn again; inspect window fm:fm-probe
+exit=1
+
+# after
+
+1     leased       $LAB/pool/.treehouse/proj-215264/1/proj  (held by lab)
+                   sleep (4113537)
+2     available    $LAB/pool/.treehouse/proj-215264/2/proj
+$LAB/pool/.treehouse/*/*/.fm-slot-owner:
+cat: '$LAB/pool/.treehouse/*/*/.fm-slot-owner': No such file or directory

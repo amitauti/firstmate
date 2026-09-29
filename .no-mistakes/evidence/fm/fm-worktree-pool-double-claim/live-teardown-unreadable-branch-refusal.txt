@@ -1,0 +1,8 @@
+# setup: stale-a record re-added naming $SLOT; $SLOT detached (branch unreadable)
+$ bin/fm-teardown.sh stale-a
+fm-gate-refuse: gate agent lifecycle permitted only against lab home $LAB
+REFUSED: task stale-a's recorded worktree $SLOT is also task live-b's recorded worktree, and the branch checked out in it cannot be read, so which task owns that copy cannot be established; nothing was changed - not even with --force.
+Read both tasks (bin/fm-crew-state.sh stale-a; bin/fm-crew-state.sh live-b), then re-run teardown once the copy is on its owning task's branch.
+exit=1
+records: live-b.meta stale-a.meta 
+live-b worker alive: yes

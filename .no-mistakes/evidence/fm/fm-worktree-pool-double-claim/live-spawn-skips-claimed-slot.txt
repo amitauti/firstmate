@@ -1,0 +1,19 @@
+# setup: slot 1 leased (live-b); slots 2 and 3 free; slot 2 named by stale task stale-c's record
+$ bin/fm-spawn.sh probe $LAB/proj --scout --harness claude --backend tmux
+fm-gate-refuse: gate agent lifecycle permitted only against lab home $LAB
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+spawned probe harness=claude kind=scout window=fm:fm-probe worktree=$LAB/pool/.treehouse/proj-215264/3/proj
+exit=0
+
+# after
+window=fm:fm-probe
+worktree=$LAB/pool/.treehouse/proj-215264/3/proj
+
+1     leased       $LAB/pool/.treehouse/proj-215264/1/proj  (held by lab)
+                   sleep (4113537)
+2     available    $LAB/pool/.treehouse/proj-215264/2/proj
+3     in-use       $LAB/pool/.treehouse/proj-215264/3/proj
+                   bash (4128145), claude (4129658)
+$LAB/pool/.treehouse/proj-215264/3/.fm-slot-owner:
+task=probe
+home=$LAB

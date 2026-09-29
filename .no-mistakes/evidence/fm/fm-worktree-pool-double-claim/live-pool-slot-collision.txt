@@ -1,0 +1,46 @@
+# setup: slot $SLOT on fm/live-b (real treehouse lease), stale-a and live-b records both name $SLOT; live-b worker running in fm:fm-live-b (pid 4113537); stale-a window gone
+$ bin/fm-crew-state.sh stale-a
+state: unknown · source: pane · harness state unavailable (unknown missing)
+exit=0
+
+$ bin/fm-crew-state.sh live-b
+state: unknown · source: pane · harness state unavailable (unknown missing)
+exit=0
+
+$ bin/fm-control.sh live-b relaunch --note test
+fm-gate-refuse: gate agent lifecycle permitted only against lab home $LAB
+error: task live-b's recorded worktree $SLOT is also task stale-a's recorded copy ($SLOT); refusing to relaunch into a colliding worktree. Read task stale-a's current state with bin/fm-crew-state.sh stale-a; when task stale-a is the stale one, close it with bin/fm-teardown.sh stale-a (it leaves a copy on task live-b's branch with task live-b), then relaunch again
+exit=1
+
+$ bin/fm-teardown.sh stale-a
+fm-gate-refuse: gate agent lifecycle permitted only against lab home $LAB
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  2 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+warning: task stale-a's recorded worktree $SLOT is task live-b's copy - it is on live-b's recorded branch 'fm/live-b' - so only stale-a's own record is closed; the slot, its copy, and task live-b's record are left untouched, and the slot is not returned to the pool.
+WARNING: watcher still down (same stale episode; last beat: never, grace 300s) - full banner already printed this episode.
+$LAB/proj: already current
+teardown stale-a complete (window fm:fm-stale-a; pool slot $SLOT left with task live-b (home $LAB) and not returned to the pool)
+Backlog: stale-a just finished (this home keeps no markdown backlog at $LAB/data/backlog.md). Update $LAB/data/backlog.md - move stale-a to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+exit=0
+
+# after teardown
+records: live-b.meta 
+slot branch: fm/live-b
+owner sentinel: $SLOT/owner-sentinel
+live-b worker alive: yes
+live-b record unchanged: yes
+treehouse status:
+
+1     leased       $SLOT  (held by lab)
+                   sleep (4113537)
+
+$ bin/fm-control.sh live-b relaunch --note test   # stale record gone: collision guard no longer fires
+fm-gate-refuse: gate agent lifecycle permitted only against lab home $LAB
+error: task live-b's endpoint reads 'ambiguous' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint
+error: relaunch of live-b failed while stopping the old agent and its state is 'ambiguous', so it was not proven stopped; its original instructions were restored and the durable record was retained for recovery
+exit=1
