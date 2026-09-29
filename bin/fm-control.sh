@@ -193,9 +193,13 @@ CONTROL_LOCK=
 CONTROL_LOCK_HELD=0
 RELAUNCH_ACTIVE=0
 RELAUNCH_PHASE=start
+CONTROL_EXIT_SUBMIT_ERR=
 
 control_cleanup() {
   local status=$?
+  if [ -n "${CONTROL_EXIT_SUBMIT_ERR:-}" ] && [ -e "$CONTROL_EXIT_SUBMIT_ERR" ]; then
+    rm -f "$CONTROL_EXIT_SUBMIT_ERR" || true
+  fi
   if [ "$RELAUNCH_ACTIVE" = 1 ] \
      && declare -F relaunch_rollback >/dev/null 2>&1; then
     relaunch_rollback || true
@@ -602,6 +606,11 @@ do_exit() {
       ;;
     *) die "task $ID's endpoint reads '$state' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint" ;;
   esac
+  cmd=$(fm_control_exit_command "$HARNESS")
+  local submit_err err_detail="" verdict reason
+  submit_err=$(mktemp "${TMPDIR:-/tmp}/fm-control-submit-err.XXXXXX") \
+    || die "could not create a temp file under ${TMPDIR:-/tmp} to capture the exit submission's errors, so the $cmd exit command was not sent to task $ID; make that directory writable, then retry '$VERB'"
+  CONTROL_EXIT_SUBMIT_ERR=$submit_err
   # A busy agent is interrupted first before the exit command is submitted.
   case "$(busy_verdict)" in
     busy*)
@@ -610,6 +619,8 @@ do_exit() {
       case "$state" in
         dead)
           retire_busy_incarnation
+          rm -f "$submit_err"
+          CONTROL_EXIT_SUBMIT_ERR=
           printf 'stopped'
           return 0
           ;;
@@ -619,7 +630,6 @@ do_exit() {
       esac
       ;;
   esac
-  cmd=$(fm_control_exit_command "$HARNESS")
   hazard=$(fm_control_interrupt_hazard_signal "$HARNESS")
   if [ -n "$hazard" ] && rendered_matches "$hazard"; then
     die "task $ID shows the $HARNESS revert picker, where typed text becomes a search and Enter reverts file changes; refusing to type the $cmd exit command. Close it with $(fm_control_interrupt_key "$HARNESS"), never Enter, then retry '$VERB'"
@@ -641,15 +651,13 @@ do_exit() {
   # authoritative proof is the agent-state wait below. The retried Enter still
   # matters, because a slash command opens a completion popup on some TUIs that
   # swallows the first Enter.
-  local submit_err err_detail="" verdict reason
-  submit_err=$(mktemp "${TMPDIR:-/tmp}/fm-control-submit-err.XXXXXX") \
-    || die "could not create a temp file under ${TMPDIR:-/tmp} to capture the exit submission's errors, so the $cmd exit command was not sent to task $ID; make that directory writable, then retry '$VERB'"
   verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL" 2>"$submit_err") \
     || verdict=send-failed
   if [ -s "$submit_err" ]; then
     err_detail=$(tr '\n' ' ' < "$submit_err" | sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//')
   fi
   rm -f "$submit_err"
+  CONTROL_EXIT_SUBMIT_ERR=
   if [ "$verdict" = send-failed ]; then
     reason="submission verdict is 'send-failed'"
     [ -z "$err_detail" ] || reason="submission verdict is 'send-failed': $err_detail"

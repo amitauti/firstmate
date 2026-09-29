@@ -256,8 +256,11 @@ case "${1:-}" in
         elif [ -n "${FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS:-}" ]; then
           printf '  \xe2\x9d\xaf\n'
         else
+          cmd=$(cat "$D/command" 2>/dev/null || true)
           lit=$(cat "$D/literal" 2>/dev/null || true)
-          if [ -n "$lit" ]; then
+          if [ "$cmd" = bash ] || [ "$cmd" = zsh ] || [ "$cmd" = sh ]; then
+            printf '  \xe2\x9d\xaf\n'
+          elif [ -n "$lit" ]; then
             printf '  \xe2\x9d\xaf %s\n' "$lit"
           else
             printf '  \xe2\x9d\xaf\n'
@@ -274,18 +277,23 @@ case "${1:-}" in
           exit 1
         fi
         printf '%s\n' "$payload" >> "$D/literal"
-        if [ -z "${FM_FAKE_NEVER_DIES:-}" ] \
-           && [ -z "${FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS:-}" ] \
-           && { [ "$payload" = /exit ] || [ "$payload" = /quit ]; }; then
-          printf 'bash' > "$D/command"
-          printf 'unknown' > "$D/agent_status"
-        fi
         exit 0
         ;;
       send-keys)
         shift
         key=${2:-}
         printf '%s\n' "$key" >> "$D/keys"
+        if { [ "$key" = Enter ] || [ "$key" = enter ]; } \
+           && [ -z "${FM_FAKE_NEVER_DIES:-}" ] \
+           && [ -z "${FM_FAKE_HERDR_PAYLOAD_PROOF_FAILS:-}" ]; then
+          lit=$(cat "$D/literal" 2>/dev/null || true)
+          case "$lit" in
+            */exit|*/quit|/exit|/quit)
+              printf 'bash' > "$D/command"
+              printf 'unknown' > "$D/agent_status"
+              ;;
+          esac
+        fi
         exit 0
         ;;
     esac
@@ -1204,6 +1212,7 @@ test_herdr_exit_healthy_idle_agent_succeeds() {
   expect_code 0 "$rc" "exit on a healthy idle herdr-backed agent should succeed"$'\n'"$out"
   assert_contains "$out" "stopped t1 harness=claude backend=herdr" "exit should report stopped"
   [ "$(literals "$dir")" = /exit ] || fail "exit should type /exit, got: $(literals "$dir")"
+  assert_contains "$(keys_sent "$dir")" enter "exit should send Enter to submit the command"
   pass "fm-control exit: a healthy idle herdr-backed agent can be exited"
 }
 
@@ -1218,6 +1227,7 @@ test_herdr_exit_healthy_done_agent_succeeds() {
   expect_code 0 "$rc" "exit on a healthy done herdr-backed agent should succeed"$'\n'"$out"
   assert_contains "$out" "stopped t1 harness=claude backend=herdr" "exit should report stopped"
   [ "$(literals "$dir")" = /exit ] || fail "exit should type /exit, got: $(literals "$dir")"
+  assert_contains "$(keys_sent "$dir")" enter "exit should send Enter to submit the command"
   pass "fm-control exit: a healthy done herdr-backed agent can be exited"
 }
 
@@ -1290,6 +1300,16 @@ test_herdr_exit_refuses_without_submit_capture_file() {
     "refusal must not claim a transport error"
   assert_not_contains "$out" "transport error" "no send was attempted"
   [ -z "$(literals "$dir")" ] || fail "no command should be typed when the capture file is unavailable"
+
+  dir=$(new_case_herdr "herdr-busy-no-tmpdir")
+  add_task "$dir" t1 claude ship herdr "default:w1:p1"
+  "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 >/dev/null
+  out=$(TMPDIR="$dir/missing-tmp" run_control "$dir" t1 exit); rc=$?
+  expect_code 1 "$rc" "exit on a busy agent should refuse when the submit capture file cannot be created"
+  assert_contains "$out" "could not create a temp file under $dir/missing-tmp" \
+    "refusal should name the temp-file failure"
+  [ -z "$(keys_sent "$dir")" ] || fail "mktemp failure before interrupt must not send any interrupt keys, got: $(keys_sent "$dir")"
+  [ -z "$(literals "$dir")" ] || fail "mktemp failure before interrupt must not type any exit command"
   pass "fm-control exit: an unwritable temp dir refuses before sending instead of reporting a transport error"
 }
 
